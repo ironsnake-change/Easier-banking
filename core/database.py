@@ -6,13 +6,21 @@ Run python -m core.database from the Easier-banking directory to initialize it.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path(__file__).resolve().parent.parent / "bank_core.db"
+if os.getenv("EASIER_BANKING_DB_PATH"):
+    DB_PATH = Path(os.environ["EASIER_BANKING_DB_PATH"]).expanduser().resolve()
+elif getattr(sys, "frozen", False):
+    _app_data = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "Easier-banking"
+    DB_PATH = _app_data / "bank_core.db"
+else:
+    DB_PATH = Path(__file__).resolve().parent.parent / "bank_core.db"
 _DB_LOCK = threading.RLock()
 
 

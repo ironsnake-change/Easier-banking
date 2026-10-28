@@ -9,9 +9,10 @@
   <script>
     (function () {
       var staticBase = location.protocol === "file:" ? "./" : "/static/";
+      var assetVersion = "20261028.3";
       var stylesheet = document.createElement("link");
       stylesheet.rel = "stylesheet";
-      stylesheet.href = staticBase + "styles.css";
+      stylesheet.href = staticBase + "styles.css?v=" + assetVersion;
       document.head.appendChild(stylesheet);
     })();
   </script>
@@ -190,11 +191,12 @@
   <script>
     (function () {
       var staticBase = location.protocol === "file:" ? "./" : "/static/";
+      var assetVersion = "20261028.3";
       var voiceEngine = document.createElement("script");
-      voiceEngine.src = staticBase + "tts-engine.js";
+      voiceEngine.src = staticBase + "tts-engine.js?v=" + assetVersion;
       voiceEngine.onload = function () {
         var application = document.createElement("script");
-        application.src = staticBase + "app.js";
+        application.src = staticBase + "app.js?v=" + assetVersion;
         application.defer = true;
         document.body.appendChild(application);
       };

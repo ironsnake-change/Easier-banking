@@ -3,6 +3,11 @@ __pycache__/
 .pytest_cache/
 .pytest-*/
 .runtime_deps/
+.build_tools/
+.desktop_venv/
+build/
+dist/
+release/
 *.sqlite3
 *.db
 .env

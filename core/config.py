@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import os
 import secrets
+import sys
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent.parent
+)
 _LOADED_ENV_FILE: Path | None = None
 
 

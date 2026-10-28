@@ -23,6 +23,22 @@
 
 应用会使用 Python 标准库自动读取项目根目录的 `.env`（若存在），进程环境变量优先。可参考 `.env.example`；其默认 `DEMO_MODE=1`，评委克隆后无需申请或配置任何大模型 Key。启动日志会明确打印当前 `demo_mode`、`gateway_mode` 与会话有效期。
 
+## Windows 桌面版
+
+构建完成后的单文件应用位于 `dist/Easier-banking.exe`，双击即可启动，无需安装 Python、Node.js 或 Docker。应用会自动启动本机 FastAPI 服务，并使用 Edge/Chrome 的独立应用窗口打开银行工作台。
+
+- 持久化数据库：`%LOCALAPPDATA%\Easier-banking\bank_core.db`
+- 启动与错误日志：`%LOCALAPPDATA%\Easier-banking\desktop.log`
+- 桌面应用不会直接打开 `static/index.html`；所有登录、余额、提案和云端模型请求都必须经过内置后端。
+
+需要重新构建时，在安装了 Python 3.11+ 的 Windows 环境运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File build_desktop.ps1
+```
+
+首次构建会把 PyInstaller 和运行依赖安装到本地 `.desktop_venv`，不会进入正式运行依赖或提交到 Git。
+
 演示账户：
 
 - 林砚：`linyan` / `Demo@2026`

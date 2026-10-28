@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -19,6 +20,9 @@ from core.gateway_guard import cloud_guard
 from core.privacy import redact_sensitive_text
 from core.receipts import amount_in_chinese
 from core.security import security_gateway
+
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """你是 Easier-banking 私人数字银行的金融业务执行助理。你拥有真实柜面业务识别权限，但所有资金与敏感权限变更都必须服从系统分级授权。
@@ -1256,6 +1260,7 @@ class AIBankingAssistant:
             return {"status": "ONLINE", "channel": "tencent_gateway", "model": config.GATEWAY_MODEL,
                     "latency_ms": latency, "endpoint": config.GATEWAY_BASE_URL}
         except Exception as exc:
+            logger.exception("Gateway probe failed: %s", exc)
             self.last_fallback_reason = self.cloud_guard.record_failure(user_id)
             self.last_channel = "local_rule_fallback"
             return {"status": "OFFLINE", "channel": "local_rule_fallback", "model": "local-semantic",
@@ -1321,7 +1326,8 @@ class AIBankingAssistant:
             self.last_latency_ms = latency
             self.last_channel = "tencent_gateway"
             return {"content": content, "latency_ms": latency, "model": payload.get("model") or config.GATEWAY_MODEL}
-        except Exception:
+        except Exception as exc:
+            logger.exception("Cloud reply failed: %s", exc)
             self.last_fallback_reason = self.cloud_guard.record_failure(user_id)
             return None
 
