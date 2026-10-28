@@ -510,6 +510,10 @@
     state.source = "cloud";
     state.token = token || "";
     state.data = normalizeState(liveState);
+    if (engineState.mode === "local" && String(prefsData().engine_mode || "auto") !== "local") {
+      engineState.mode = "cloud";
+      try { localStorage.setItem(ENGINE_MODE_KEY, "cloud"); } catch (error) {}
+    }
     sessionSet(SESSION_TOKEN, state.token);
     sessionSet(SESSION_LOCAL_ACCOUNT, "");
     showApp();
@@ -1151,7 +1155,10 @@
           if (!isTransport(error)) throw error;
         }
       }
-      if (!result || result.status !== "ONLINE") throw new Error("服务暂不可用，操作未执行");
+      if (!result || result.status !== "ONLINE") {
+        var detail = result && (result.error || result.reason);
+        throw new Error(detail || "云端探测未返回 ONLINE");
+      }
       var latency = Number(result.latency_ms || Math.round(performance.now() - started));
       setCloudStatus("online", result.channel || "tencent_gateway", latency);
       safeText("probeResult", "腾讯云上海节点 · " + latency + "ms · ONLINE");
@@ -1162,6 +1169,14 @@
       safeText("probeResult", "云端暂不可达 · " + engineState.lastError);
       if (badge) { badge.textContent = "LOCAL READY"; badge.style.color = "var(--amber)"; }
     }
+  }
+
+  function activateCloudProbe() {
+    engineState.mode = "cloud";
+    try { localStorage.setItem(ENGINE_MODE_KEY, "cloud"); } catch (error) {}
+    engineState.status = "checking";
+    renderEngine();
+    probeEngine();
   }
 
   function setAuthTab(tab) {
@@ -1369,6 +1384,10 @@
       var remoteState = await requestJSON("/api/state", { method: "GET" });
       state.source = "cloud";
       state.data = normalizeState(remoteState);
+      if (engineState.mode === "local" && String(prefsData().engine_mode || "auto") !== "local") {
+        engineState.mode = "cloud";
+        try { localStorage.setItem(ENGINE_MODE_KEY, "cloud"); } catch (error) {}
+      }
       showApp();
     } catch (error) {
       if (localAccounts.linyan) {
@@ -3232,7 +3251,7 @@
     all("[data-engine-mode]").forEach(function (button) {
       button.onclick = function () { setEngineMode(button.getAttribute("data-engine-mode")); };
     });
-    if (byId("probeGateway")) byId("probeGateway").onclick = probeEngine;
+    if (byId("probeGateway")) byId("probeGateway").onclick = activateCloudProbe;
     if (byId("saveDirectKey")) byId("saveDirectKey").onclick = function () {
       var key = byId("directApiKey") ? byId("directApiKey").value.trim() : "";
       if (!key) { toast("请输入有效的备用 API Key。"); return; }
