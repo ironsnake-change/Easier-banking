@@ -23,6 +23,7 @@ OTP_PEPPER = os.getenv("OTP_PEPPER", config.GATEWAY_APP_SECRET)
 
 ACTION_LABELS = {
     "cancel_subscription": "周期代扣拦截",
+    "restore_subscription": "恢复周期代扣授权",
     "subscribe_service": "新增付费订阅",
     "transfer": "账户转账",
     "manage_pocket": "专项资金口袋",
@@ -127,6 +128,14 @@ def normalize_action(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         if not service:
             return None
         clean["params"] = {"service_name": service, "amount": _money(params.get("amount"))}
+    elif name == "restore_subscription":
+        sub_id = str(params.get("sub_id") or "").strip()[:64]
+        if not sub_id:
+            return None
+        clean["params"] = {
+            "sub_id": sub_id,
+            "service_name": _clean_service(params.get("service_name") or ""),
+        }
     elif name == "subscribe_service":
         service = _clean_service(params.get("service_name") or params.get("service") or "")
         amount = _money(params.get("amount"))
@@ -262,7 +271,8 @@ def _card(user_id: str, tail: str = "") -> dict[str, Any] | None:
         for row in rows:
             if str(row["card_no"]).endswith(str(tail)):
                 return dict(row)
-    return dict(rows[0])
+        return None
+    return dict(rows[0]) if len(rows) == 1 else None
 
 
 def _recipient_registered(user_id: str, recipient: str) -> bool:
@@ -331,9 +341,10 @@ def classify(user_id: str, action: dict[str, Any] | None) -> dict[str, Any]:
             return {"level": "L3", "requires": ["confirmation", "otp"], "reasons": [f"单日风控限额将从 {base:.2f} 元调高至 {value:.2f} 元"]}
         return {"level": "L2", "requires": ["confirmation"], "reasons": ["单日风控限额调整不会突破当前风险边界"]}
 
-    if name in {"cancel_subscription", "subscribe_service", "manage_pocket", "subscribe_wealth", "redeem_wealth"}:
+    if name in {"cancel_subscription", "restore_subscription", "subscribe_service", "manage_pocket", "subscribe_wealth", "redeem_wealth"}:
         labels = {
             "cancel_subscription": "取消订阅会改变第三方扣款授权",
+            "restore_subscription": "恢复订阅会重新建立第三方扣款授权",
             "subscribe_service": "新增订阅会建立持续扣款授权",
             "manage_pocket": "专项资金划拨会改变可用余额与锁定资金",
             "subscribe_wealth": "理财申购涉及风险适当性与资金划转",
@@ -436,6 +447,17 @@ def _card_payload(user_id: str, proposal_id: str, action: dict[str, Any], info: 
     base, used, _ = _base_limit(user_id)
     effective = effective_daily_limit(user_id)
     remaining = max(0.0, effective - used)
+    target = params.get("recipient") or params.get("service_name") or params.get("name") or params.get("card_tail") or "当前账户"
+    if action.get("action") == "restore_subscription":
+        connection = database.get_connection()
+        try:
+            row = connection.execute(
+                "SELECT merchant FROM subscriptions WHERE sub_id=? AND user_id=?",
+                (params.get("sub_id", ""), user_id),
+            ).fetchone()
+            target = str(row["merchant"]) if row else str(params.get("service_name") or "已取消订阅")
+        finally:
+            connection.close()
     return {
         "proposal_id": proposal_id,
         "level": info["level"],
@@ -444,7 +466,7 @@ def _card_payload(user_id: str, proposal_id: str, action: dict[str, Any], info: 
         "status": "PENDING",
         "action": action,
         "business_type": ACTION_LABELS.get(action["action"], "账户操作"),
-        "target": params.get("recipient") or params.get("service_name") or params.get("name") or params.get("card_tail") or "当前账户",
+        "target": target,
         "amount": amount,
         "card_tail": params.get("card_tail") or (str(card["card_no"])[-4:] if card else ""),
         "remaining_limit": round(remaining, 2),

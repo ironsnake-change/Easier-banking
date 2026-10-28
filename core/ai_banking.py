@@ -37,6 +37,7 @@ SYSTEM_PROMPT = """你是 Easier-banking 私人数字银行的金融业务执行
 <bank_action>{"action":"动作名","params":{...}}</bank_action>
 只能使用以下 action：
 - cancel_subscription: params={"service_name":"服务名","amount":可选月费}
+- restore_subscription: params={"sub_id":"已取消订阅编号","service_name":"服务名"}
 - subscribe_service: params={"service_name":"服务名","amount":金额,"cycle":"每月"}
 - transfer: params={"recipient":"收款人","amount":金额,"remark":"用途"}
 - manage_pocket: params={"operation":"create|deposit|withdraw","name":"口袋名","amount":金额}
@@ -49,6 +50,7 @@ SYSTEM_PROMPT = """你是 Easier-banking 私人数字银行的金融业务执行
 
 ALLOWED_ACTIONS = {
     "cancel_subscription",
+    "restore_subscription",
     "subscribe_service",
     "transfer",
     "manage_pocket",
@@ -60,6 +62,7 @@ ALLOWED_ACTIONS = {
 
 ACTION_LABELS = {
     "cancel_subscription": "周期代扣拦截",
+    "restore_subscription": "恢复周期代扣授权",
     "subscribe_service": "新增付费订阅",
     "transfer": "账户转账",
     "manage_pocket": "专项资金口袋",
@@ -86,7 +89,95 @@ COMMON_SUBSCRIPTION_LABELS = {
     "icloud": "iCloud+ 云存储订阅",
     "apple music": "Apple Music 个人订阅",
     "spotify": "Spotify Premium 订阅",
+    "腾讯视频": "腾讯视频 VIP 连续包月",
+    "爱奇艺": "爱奇艺黄金 VIP 连续包月",
+    "网易云音乐": "网易云音乐黑胶 VIP",
+    "wps": "WPS 超级会员连续包月",
 }
+
+_CN_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_CN_SMALL_UNITS = {"十": 10, "百": 100, "千": 1000}
+_CN_LARGE_UNITS = {"万": 10_000, "亿": 100_000_000}
+_CN_NUMBER_CHARS = "零〇一二两三四五六七八九十百千万亿"
+_AMOUNT_TOKEN_RE = rf"(?:\d[\d,]*(?:\.\d{{1,2}})?\s*[kKwW万]?|[{_CN_NUMBER_CHARS}]+)"
+_SERVICE_PRONOUNS = {"情况", "他们", "她们", "它们", "这个", "那个", "它", "吗", "服务", "订阅", "会员"}
+_READ_ONLY_MARKERS = (
+    "吗", "么", "？", "?", "看一下", "看看", "查一下", "查询", "查看", "有哪些", "多少",
+    "情况", "怎么样", "如何", "是否", "有没有", "余额", "明细", "记录", "状态", "收益",
+    "趋势", "扣了", "还能", "剩余", "是多少", "是什么",
+)
+
+
+def parse_chinese_amount(value: Any) -> float:
+    """Parse Arabic, colloquial Chinese, and compact amounts without network dependencies."""
+    text = str(value or "").strip().replace("，", ",").replace("￥", "").replace("¥", "")
+    if not text:
+        return 0.0
+    compact = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*([kKwW万])", text)
+    if compact:
+        number = float(compact.group(1).replace(",", ""))
+        return round(number * (10_000 if compact.group(2).lower() in {"w", "万"} else 1000), 2)
+    arabic = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)", text)
+    if arabic:
+        return round(float(arabic.group(1).replace(",", "")), 2)
+
+    token_match = re.search(rf"[{_CN_NUMBER_CHARS}]+", text)
+    if not token_match:
+        return 0.0
+    token = token_match.group(0).replace("两", "二").replace("〇", "零")
+    shorthand = re.fullmatch(r"(.+万)([一二三四五六七八九])$", token)
+    if shorthand:
+        token = shorthand.group(1) + shorthand.group(2) + "千"
+    else:
+        shorthand = re.fullmatch(r"(.+亿)([一二三四五六七八九])$", token)
+        if shorthand:
+            token = shorthand.group(1) + shorthand.group(2) + "千万"
+
+    total = 0.0
+    section = 0.0
+    current = 0.0
+    for char in token:
+        if char in _CN_DIGITS:
+            current = float(_CN_DIGITS[char])
+        elif char in _CN_SMALL_UNITS:
+            section += (current or 1.0) * _CN_SMALL_UNITS[char]
+            current = 0.0
+        elif char in _CN_LARGE_UNITS:
+            section += current
+            if char == "亿":
+                total = (total + section) * _CN_LARGE_UNITS[char]
+            else:
+                total += section * _CN_LARGE_UNITS[char]
+            section = 0.0
+            current = 0.0
+    return round(total + section + current, 2)
+
+
+def _amount_from_text(text: str) -> float:
+    raw = str(text or "")
+    arabic = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?\s*[kKwW万]?)", raw)
+    if arabic:
+        return parse_chinese_amount(arabic.group(1))
+    chinese = re.search(rf"[{_CN_NUMBER_CHARS}]*[十百千万亿][{_CN_NUMBER_CHARS}]*(?:元|块|整)?", raw)
+    return parse_chinese_amount(chinese.group(0)) if chinese else 0.0
+
+
+def _mask_card_numbers(text: str) -> str:
+    value = str(text or "")
+    value = re.sub(
+        r"(?<!\d)\d{4,8}[\s*-]*\*{4,}[\s-]*(\d{4})(?!\d)",
+        lambda match: "****" + match.group(1),
+        value,
+    )
+    value = re.sub(
+        r"(?<!\d)(?:\d[\s-]?){12,19}(?!\d)",
+        lambda match: "****" + re.sub(r"\D", "", match.group(0))[-4:],
+        value,
+    )
+    return value
 
 
 def _money(value: Any, default: float = 0.0) -> float:
@@ -112,16 +203,18 @@ def _card(connection: sqlite3.Connection, user_id: str, descriptor: str = "") ->
     if not rows:
         return None
     text = str(descriptor or "").strip().lower()
-    tails = re.findall(r"d{4}", text)
+    tails = re.findall(r"\d{4}", text)
     for row in rows:
         number = str(row["card_no"] or "")
         if any(number.endswith(tail) for tail in tails) or row["card_id"].lower() in text:
             return row
+    if tails:
+        return None
     if "信用" in text:
         for row in rows:
             if "信用" in str(row["card_type"]):
                 return row
-    return rows[0]
+    return rows[0] if len(rows) == 1 else None
 
 
 def build_account_context(user_id: str) -> dict[str, Any]:
@@ -163,10 +256,14 @@ def build_account_context(user_id: str) -> dict[str, Any]:
             "remaining": max(0.0, _money(preferences.get("transfer_threshold"), 1000.0) - _money(user["daily_transfer_used"] if user else 0)),
         },
         "cards": [
-            {key: row.get(key) for key in (
-                "card_id", "card_no", "card_type", "status", "daily_limit", "night_lock",
-                "overseas_lock", "recurring_debit_lock", "atm_magnet_lock"
-            )}
+            {
+                "card_id": row.get("card_id"),
+                "card_tail": str(row.get("card_no") or "")[-4:],
+                **{key: row.get(key) for key in (
+                    "card_type", "status", "daily_limit", "night_lock", "overseas_lock",
+                    "recurring_debit_lock", "atm_magnet_lock", "night_limit", "usage_label",
+                )},
+            }
             for row in cards
         ],
         "subscriptions": [
@@ -235,6 +332,7 @@ def _clean_service_name(value: str) -> str:
     text = re.sub("[\"“”‘’']", "", str(value or "")).strip()
     text = re.sub(r"^(一下|掉|我的|这个|那个)\s*", "", text)
     text = re.sub(r"(的)?(连续包月|自动续费|自动扣费|订阅服务|订阅|会员|服务)$", "", text).strip()
+    text = re.sub(r"(?:吗|呢|吧|啊|[?？。！!，,])+$", "", text).strip()
     return text[:80]
 
 
@@ -245,11 +343,58 @@ def _card_tail_from_text(text: str) -> str:
     return match.group(1) or match.group(2) or ""
 
 
-def infer_action(message: str) -> dict[str, Any] | None:
+def _explicit_complete_write(text: str) -> bool:
+    """Return true only when a question also contains a complete write command."""
+    if re.search(
+        rf"(?:给|向|转账给)\s*[^，。,.!?！？]{{1,20}}?\s*(?:转账|转)\s*{_AMOUNT_TOKEN_RE}",
+        text,
+    ):
+        return True
+    if re.search(rf"转(?:账)?\s*{_AMOUNT_TOKEN_RE}\s*(?:元|块)?\s*(?:给|至)\s*\S", text):
+        return True
+    service_match = re.search(
+        r"(?:退订|取消订阅|终止代扣|关闭自动续费|关掉)\s*([^，。,.!?！？]{2,30})", text
+    )
+    if service_match:
+        service = _clean_service_name(service_match.group(1))
+        if service and service not in _SERVICE_PRONOUNS:
+            return True
+    subscribe_match = re.search(
+        r"(?:开通|订购|重新订阅|新开通|新订)\s*([^，。,.!?！？]{2,30})", text
+    )
+    if subscribe_match:
+        service = _clean_service_name(subscribe_match.group(1))
+        if service and service not in _SERVICE_PRONOUNS:
+            return True
+    if any(word in text for word in ("冻结", "解冻", "止付", "锁卡")) and _card_tail_from_text(text):
+        return True
+    if any(word in text for word in ("境外锁", "夜间锁", "代扣总闸", "ATM")) and any(
+        word in text for word in ("开启", "关闭", "打开", "关掉", "恢复", "锁死", "锁定")
+    ):
+        return True
+    if re.search(rf"(?:存|划|取)[^，。,.!?！？]{{0,12}}{_AMOUNT_TOKEN_RE}[^，。,.!?！？]{{0,8}}口袋", text):
+        return True
+    if any(word in text for word in ("赎回", "申购")) and any(
+        word in text for word in ("朝朝宝", "季季盈", "主动股票", "股票精选")
+    ):
+        return True
+    return False
+
+
+def _is_read_only_message(message: str) -> bool:
+    text = str(message or "").strip()
+    if not any(marker in text for marker in _READ_ONLY_MARKERS):
+        return False
+    return not _explicit_complete_write(text)
+
+
+def infer_action(message: str, user_id: str | None = None) -> dict[str, Any] | None:
+    """Parse an action candidate. Entity authorization is completed by chat()."""
     text = str(message or "").strip()
     lowered = text.lower()
-    amount_match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*(?:元|块)?", text.replace("，", ""))
-    amount = _money(amount_match.group(1).replace(",", "")) if amount_match else 0.0
+    if _is_read_only_message(text):
+        return None
+    amount = _amount_from_text(text)
 
     if any(word in text for word in ("境外", "海外")) and any(word in text for word in ("锁死", "锁定", "关闭", "关掉", "开启", "解锁")):
         value = not any(word in text for word in ("解锁", "开启", "恢复"))
@@ -277,15 +422,17 @@ def infer_action(message: str) -> dict[str, Any] | None:
         if service:
             return {"action": "cancel_subscription", "params": {"service_name": service, "amount": amount}}
 
-    if any(word in text for word in ("订阅", "开通", "订购")) and "退订" not in text:
+    if any(word in text for word in ("开通", "订购", "重新订阅")) and "退订" not in text:
         match = re.search(r"(?:订阅|开通|订购)(?:一下|一个)?\s*([^，。,.!?！？]+)", text)
-        service = _clean_service_name(match.group(1)) if match else "数字会员"
-        service = re.sub(r"\s*(?:每月|月费)?\s*\d+.*$", "", service).strip() or "数字会员"
+        service = _clean_service_name(match.group(1)) if match else ""
+        service = re.sub(r"\s*(?:每月|月费)?\s*(?:\d+|[" + _CN_NUMBER_CHARS + r"]+).*$", "", service).strip()
+        if not service or service in _SERVICE_PRONOUNS:
+            return None
         if amount <= 0:
             amount = next((price for name, price in COMMON_SUBSCRIPTION_PRICES.items() if name in lowered), 0.0)
         return {"action": "subscribe_service", "params": {"service_name": service, "amount": amount, "cycle": "每月"}}
 
-    pocket_transfer = re.search(r"(?:转|划|存)\s*\d[\d,]*(?:\.\d{1,2})?\s*元?\s*(?:到|至|进)\s*([^，。,.!?！？]{2,24})", text)
+    pocket_transfer = re.search(rf"(?:转|划|存)\s*{_AMOUNT_TOKEN_RE}\s*(?:元|块)?\s*(?:到|至|进)\s*([^，。,.!?！？]{{2,24}})", text)
     if pocket_transfer and any(word in pocket_transfer.group(1) for word in ("基金", "口袋")):
         name = _clean_service_name(re.sub(r"(专项资金)?口袋$", "", pocket_transfer.group(1)))
         return {"action": "manage_pocket", "params": {"operation": "deposit", "name": name, "amount": amount}}
@@ -314,9 +461,9 @@ def infer_action(message: str) -> dict[str, Any] | None:
 
     if "转" in text or "汇" in text:
         patterns = [
-            r"给\s*([^，。,.!?！？]{2,20}?)\s*转(?:账)?\s*(\d[\d,]*(?:\.\d{1,2})?)",
-            r"(?:向|转账给)\s*([^，。,.!?！？]{2,20}?)\s*(?:转账|转)\s*(\d[\d,]*(?:\.\d{1,2})?)",
-            r"转(?:账)?\s*(\d[\d,]*(?:\.\d{1,2})?)\s*元?\s*(?:给|至)\s*([^，。,.!?！？]{2,20})",
+            rf"给\s*([^，。,.!?！？]{{1,20}}?)\s*转(?:账)?\s*({_AMOUNT_TOKEN_RE})(?:\s*(?:元|块|整))?",
+            rf"(?:向|转账给)\s*([^，。,.!?！？]{{1,20}}?)\s*(?:转账|转)\s*({_AMOUNT_TOKEN_RE})(?:\s*(?:元|块|整))?",
+            rf"转(?:账)?\s*({_AMOUNT_TOKEN_RE})(?:\s*(?:元|块|整))?\s*(?:给|至)\s*([^，。,.!?！？]{{1,20}})",
         ]
         for index, pattern in enumerate(patterns):
             match = re.search(pattern, text)
@@ -325,10 +472,387 @@ def infer_action(message: str) -> dict[str, Any] | None:
                 transfer_amount = match.group(2) if index < 2 else match.group(1)
                 return {"action": "transfer", "params": {
                     "recipient": recipient.strip(),
-                    "amount": _money(transfer_amount.replace(",", "")),
+                    "amount": parse_chinese_amount(transfer_amount),
                     "remark": "私人金融助理发起",
                 }}
     return None
+
+
+def ensure_ai_session_schema() -> None:
+    connection = database.get_connection()
+    try:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS ai_session_state ("
+            "user_id TEXT PRIMARY KEY,last_action_json TEXT NOT NULL DEFAULT '{}',"
+            "undo_action_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _load_action_state(user_id: str) -> dict[str, Any]:
+    ensure_ai_session_schema()
+    policy.ensure_schema()
+    connection = database.get_connection()
+    try:
+        row = connection.execute("SELECT * FROM ai_session_state WHERE user_id=?", (user_id,)).fetchone()
+        pending = connection.execute(
+            "SELECT proposal_id,action_json,level,expires_at FROM action_proposals "
+            "WHERE user_id=? AND status='PENDING' ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    if not row:
+        last_action = None
+        undo_payload = None
+    else:
+        try:
+            last_action = json.loads(row["last_action_json"] or "{}") or None
+        except json.JSONDecodeError:
+            last_action = None
+        try:
+            undo_payload = json.loads(row["undo_action_json"] or "{}") or None
+        except json.JSONDecodeError:
+            undo_payload = None
+    pending_action = None
+    if pending:
+        try:
+            pending_action = {
+                "proposal_id": pending["proposal_id"],
+                "action": json.loads(pending["action_json"]),
+                "level": pending["level"],
+                "expires_at": pending["expires_at"],
+            }
+        except json.JSONDecodeError:
+            pending_action = {"proposal_id": pending["proposal_id"], "action": None}
+    return {
+        "last_action": last_action,
+        "undo_payload": undo_payload,
+        "can_undo": bool(undo_payload),
+        "pending_action": pending_action,
+    }
+
+
+def _save_action_state(connection: sqlite3.Connection, user_id: str, action: dict[str, Any],
+                       undo_action: dict[str, Any] | None) -> None:
+    connection.execute(
+        "INSERT OR REPLACE INTO ai_session_state "
+        "(user_id,last_action_json,undo_action_json,updated_at) VALUES (?,?,?,?)",
+        (
+            user_id,
+            json.dumps(action, ensure_ascii=False, sort_keys=True),
+            json.dumps(undo_action or {}, ensure_ascii=False, sort_keys=True),
+            datetime.now().astimezone().isoformat(timespec="seconds"),
+        ),
+    )
+
+
+def _is_undo_request(message: str) -> bool:
+    text = re.sub(r"\s+", "", str(message or ""))
+    return bool(re.fullmatch(r"(?:请)?(?:帮我)?(?:撤回|撤销|撤回刚才(?:的)?操作|撤销刚才(?:的)?操作|恢复刚才(?:的)?操作)[。！!]?", text))
+
+
+def _clarification(question: str, options: list[str], *, reply_text: str = "",
+                   tool_name: str = "assistant_chat", scene: str = "智能银行对话") -> dict[str, Any]:
+    clean_options = []
+    for option in options:
+        value = str(option or "").strip()
+        if value and value not in clean_options:
+            clean_options.append(value)
+    visible = reply_text or question
+    return {
+        "status": "CLARIFICATION_NEEDED",
+        "tool_name": tool_name,
+        "scene": scene,
+        "risk_level": "GREEN",
+        "risk_reason": "实体信息不足或无法唯一匹配，按最保守策略暂停办理",
+        "summary": question,
+        "elder_voice_text": visible,
+        "data": {"question": question, "options": clean_options},
+        "ground_truth_numbers": [],
+        "rollback_token": None,
+        "reply_text": visible,
+        "question": question,
+        "options": clean_options,
+        "bank_action": None,
+    }
+
+
+def _contact_match_rows(user_id: str, recipient: str) -> list[dict[str, Any]]:
+    connection = database.get_connection()
+    try:
+        rows = [dict(row) for row in connection.execute(
+            "SELECT contact_id,name,alias,phone,bank_card,relation FROM contacts WHERE user_id=? ORDER BY contact_id",
+            (user_id,),
+        ).fetchall()]
+    finally:
+        connection.close()
+    needle = str(recipient or "").strip().lower().replace(" ", "")
+    if not needle:
+        return []
+    matched = []
+    for row in rows:
+        aliases = [part.strip().lower().replace(" ", "") for part in str(row.get("alias") or "").split(",") if part.strip()]
+        card = re.sub(r"\D", "", str(row.get("bank_card") or ""))
+        phone = re.sub(r"\D", "", str(row.get("phone") or ""))
+        if needle in {str(row.get("name") or "").lower(), *aliases} or needle == card or needle == phone:
+            matched.append(row)
+    return matched
+
+
+def _subscription_rows(user_id: str) -> list[dict[str, Any]]:
+    connection = database.get_connection()
+    try:
+        return [dict(row) for row in connection.execute(
+            "SELECT * FROM subscriptions WHERE user_id=? ORDER BY sub_id", (user_id,)
+        ).fetchall()]
+    finally:
+        connection.close()
+
+
+def _subscription_matches(user_id: str, service: str, *, status: str | None = None) -> list[dict[str, Any]]:
+    needle = str(service or "").lower().replace(" ", "")
+    if not needle or service in _SERVICE_PRONOUNS:
+        return []
+    rows = _subscription_rows(user_id)
+    if status:
+        rows = [row for row in rows if str(row.get("status")) == status]
+    matched = []
+    for row in rows:
+        merchant = str(row.get("merchant") or "")
+        normalized = merchant.lower().replace(" ", "")
+        if needle in normalized or normalized in needle:
+            matched.append(row)
+            continue
+        known_tokens = {
+            "流媒体": ("流媒体", "视频"), "星光视频": ("星光", "视频"),
+            "极速云盘": ("云空间", "云盘"), "云空间": ("云空间", "云盘"),
+            "musescore": ("musescore",), "netflix": ("netflix",),
+        }
+        if any(token in needle for token in known_tokens) and any(
+            token in normalized for tokens in known_tokens.values() for token in tokens if token in needle
+        ):
+            matched.append(row)
+    unique: dict[str, dict[str, Any]] = {}
+    for row in matched:
+        unique[str(row["sub_id"])] = row
+    return list(unique.values())
+
+
+def _card_descriptor(row: dict[str, Any]) -> str:
+    return f"{row.get('card_type') or '银行卡'} · 尾号 {row.get('card_tail') or ''}"
+
+
+def _card_action_option(operation: str, tail: str) -> str:
+    verb = {
+        "freeze": "冻结", "unfreeze": "解冻", "overseas_lock": "设置境外锁",
+        "night_lock": "设置夜间锁", "recurring_lock": "设置代扣总闸",
+        "atm_lock": "设置ATM保护", "adjust_limit": "调整限额",
+    }.get(operation, "操作")
+    return f"{verb}尾号 {tail} 的卡"
+
+
+def _is_self_transfer(user_id: str, recipient: str) -> bool:
+    value = re.sub(r"(?:的)?(?:账户|银行卡|卡)$", "", str(recipient or "").strip())
+    value = value.replace(" ", "")
+    if value in {"我", "自己", "我自己", "本人", "本人账户", "当前账户", "我的账户", "我的自己"}:
+        return True
+    profile = workspace.get_user_profile(user_id)
+    connection = database.get_connection()
+    try:
+        account = _account(connection, user_id)
+    finally:
+        connection.close()
+    own_values = {
+        str(profile.get("name") or "").replace(" ", ""),
+        str(account["account_id"] if account else "").replace(" ", ""),
+        str(account["account_name"] if account else "").replace(" ", ""),
+    }
+    return bool(value and value in own_values)
+
+
+def _validate_action_entities(user_id: str, action: dict[str, Any], message: str,
+                              context: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    name = action["action"]
+    params = action["params"]
+    if name == "transfer":
+        recipient = str(params.get("recipient") or "").strip()
+        if _is_self_transfer(user_id, recipient):
+            connection = database.get_connection()
+            try:
+                contacts = [dict(row) for row in connection.execute(
+                    "SELECT name,alias,relation FROM contacts WHERE user_id=? ORDER BY contact_id LIMIT 6",
+                    (user_id,),
+                ).fetchall()]
+            finally:
+                connection.close()
+            return None, _clarification(
+                "收款人不能是当前账户本人，请提供已登记且非本人的收款人。",
+                [f"给{row['name']}转账" for row in contacts],
+                reply_text="这笔转账的收款方与当前账户相同，系统不会生成转账指令。请告诉我正确的收款人。",
+                tool_name="transfer", scene="智能转账",
+            )
+        matches = _contact_match_rows(user_id, recipient)
+        if not matches:
+            contacts = _contact_match_rows(user_id, "")
+            connection = database.get_connection()
+            try:
+                contacts = [dict(row) for row in connection.execute(
+                    "SELECT name,alias,relation FROM contacts WHERE user_id=? ORDER BY contact_id LIMIT 6", (user_id,)
+                ).fetchall()]
+            finally:
+                connection.close()
+            options = [f"给{row['name']}转账" for row in contacts]
+            return None, _clarification(
+                f"未找到已登记的收款人「{recipient}」，请先选择联系人或补充实名收款账户。",
+                options or ["查看我的联系人", "取消本次转账"],
+                reply_text=f"我没有在已登记联系人中找到「{recipient}」。请明确收款人后再发起转账。",
+                tool_name="transfer", scene="智能转账",
+            )
+        if len(matches) > 1:
+            labels = [f"{row['name']} · {row.get('relation') or row.get('alias') or row.get('phone', '')[-4:]}" for row in matches]
+            return None, _clarification(
+                f"联系人「{recipient}」存在多个同名对象，请选择具体收款人。",
+                labels, tool_name="transfer", scene="智能转账",
+            )
+        params["recipient"] = str(matches[0]["name"])
+        return action, None
+
+    if name == "card_control":
+        cards = list(context.get("cards") or [])
+        tail = str(params.get("card_tail") or _card_tail_from_text(message) or "")
+        matches = [row for row in cards if tail and str(row.get("card_tail")) == tail]
+        options = [_card_action_option(params.get("operation", ""), str(row.get("card_tail"))) for row in cards]
+        if tail and not matches:
+            return None, _clarification(
+                f"未找到尾号 {tail} 的银行卡，请选择要操作的卡片。", options,
+                reply_text=f"没有找到尾号 {tail} 的银行卡。为避免误操作，我不会自动改用其他卡。",
+                tool_name="card_control", scene="银行卡管理",
+            )
+        if not tail and len(cards) != 1:
+            detail = "、".join(_card_descriptor(row) for row in cards) or "暂无可操作银行卡"
+            return None, _clarification(
+                f"您名下有多张银行卡，请明确操作哪一张（{detail}）。", options,
+                tool_name="card_control", scene="银行卡管理",
+            )
+        if not tail and len(cards) == 1:
+            params["card_tail"] = str(cards[0].get("card_tail"))
+        return action, None
+
+    if name == "cancel_subscription":
+        service = str(params.get("service_name") or "")
+        if service in _SERVICE_PRONOUNS:
+            active = [row for row in _subscription_rows(user_id) if row.get("status") == "ACTIVE"]
+            return None, _clarification(
+                "请明确要退订的具体服务。", [f"退订 {row['merchant']}" for row in active],
+                tool_name="cancel_subscription", scene="订阅管理",
+            )
+        matches = _subscription_matches(user_id, service, status="ACTIVE")
+        if not matches:
+            active = [row for row in _subscription_rows(user_id) if row.get("status") == "ACTIVE"]
+            return None, _clarification(
+                f"未找到该订阅「{service}」，请选择当前有效的代扣服务。",
+                [f"退订 {row['merchant']}" for row in active],
+                reply_text=f"未找到该订阅「{service}」。系统不会创建虚假的取消记录或声称节省费用。",
+                tool_name="cancel_subscription", scene="订阅管理",
+            )
+        if len(matches) > 1:
+            return None, _clarification(
+                "匹配到多个订阅，请选择要退订的一项。",
+                [f"退订 {row['merchant']}" for row in matches],
+                tool_name="cancel_subscription", scene="订阅管理",
+            )
+        params["service_name"] = str(matches[0]["merchant"])
+        params["amount"] = _money(matches[0].get("amount"))
+        return action, None
+
+    if name == "restore_subscription":
+        sub_id = str(params.get("sub_id") or "")
+        row = next((item for item in _subscription_rows(user_id) if str(item.get("sub_id")) == sub_id), None)
+        if not row:
+            return None, _clarification(
+                "未找到可恢复的订阅记录。", ["查看我的订阅"],
+                tool_name="restore_subscription", scene="订阅管理",
+            )
+        params["service_name"] = str(row["merchant"])
+        return action, None
+
+    if name == "subscribe_service":
+        service = str(params.get("service_name") or "")
+        lowered = service.lower()
+        if service in _SERVICE_PRONOUNS or any(token in service for token in ("他们", "这个", "那个", "它")):
+            cancelled = [row for row in _subscription_rows(user_id) if row.get("status") == "CANCELLED"]
+            options = [f"重新订阅 {row['merchant']}" for row in cancelled]
+            options.extend(f"重新订阅 {label}" for label in COMMON_SUBSCRIPTION_LABELS.values() if f"重新订阅 {label}" not in options)
+            return None, _clarification(
+                "请明确要重新订阅哪项服务。", options[:6],
+                reply_text="我需要确认具体服务名称后才能生成订阅提案，不能把“他们”当作服务名。",
+                tool_name="subscribe_service", scene="订阅管理",
+            )
+        cancelled_matches = _subscription_matches(user_id, service, status="CANCELLED")
+        if len(cancelled_matches) == 1:
+            row = cancelled_matches[0]
+            restored = {"action": "restore_subscription", "params": {
+                "sub_id": str(row["sub_id"]), "service_name": str(row["merchant"]),
+            }}
+            return _normalize_action(restored), None
+        active_matches = _subscription_matches(user_id, service, status="ACTIVE")
+        if active_matches:
+            return None, _clarification(
+                f"「{active_matches[0]['merchant']}」已经是有效订阅，无需重复开通。",
+                ["查看我的订阅"], tool_name="subscribe_service", scene="订阅管理",
+            )
+        whitelist_hit = any(key in lowered or label in service for key, label in COMMON_SUBSCRIPTION_LABELS.items())
+        explicit_new = bool(re.search(r"(?:新开通|开通|订购|新订|重新订阅)", message)) and _money(params.get("amount")) > 0
+        if not whitelist_hit or not explicit_new:
+            return None, _clarification(
+                f"「{service}」不在可开通服务白名单中，请选择明确的服务名称与价格。",
+                list(COMMON_SUBSCRIPTION_LABELS.values()),
+                tool_name="subscribe_service", scene="订阅管理",
+            )
+        return action, None
+
+    if name == "manage_pocket":
+        pocket_name = str(params.get("name") or "")
+        if params.get("operation") != "create":
+            connection = database.get_connection()
+            try:
+                row = connection.execute(
+                    "SELECT pocket_id,name FROM pockets WHERE user_id=? AND name=? LIMIT 1",
+                    (user_id, pocket_name),
+                ).fetchone()
+            finally:
+                connection.close()
+            if not row:
+                pockets = context.get("pockets", [])
+                return None, _clarification(
+                    f"未找到「{pocket_name}」资金口袋，请选择要操作的口袋。",
+                    [str(item.get("name")) for item in pockets],
+                    tool_name="manage_pocket", scene="专项资金口袋",
+                )
+        return action, None
+
+    if name in {"subscribe_wealth", "redeem_wealth"}:
+        product_name = str(params.get("product_name") or "")
+        connection = database.get_connection()
+        try:
+            product = connection.execute(
+                "SELECT product_id,name FROM wealth_products WHERE name LIKE ? ORDER BY product_id LIMIT 1",
+                (f"%{product_name}%",),
+            ).fetchone()
+        finally:
+            connection.close()
+        if not product:
+            return None, _clarification(
+                f"未找到理财产品「{product_name}」，请选择明确的产品。",
+                ["微众活期+朝朝宝", "微众稳健季季盈"], tool_name=name, scene="理财操作",
+            )
+        params["product_name"] = str(product["name"])
+        return action, None
+
+    return action, None
 
 
 def _normalize_action(raw: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -399,6 +923,7 @@ def _audit_receipt(user_id: str, action: dict[str, Any], summary: str, amount: f
 
 def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[str, Any]:
     policy.ensure_schema()
+    ensure_ai_session_schema()
     action = _normalize_action(action) or {}
     name = action.get("action")
     params = action.get("params", {})
@@ -410,6 +935,7 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
     summary = ""
     amount = 0.0
     balance_after = 0.0
+    undo_action: dict[str, Any] | None = None
     try:
         connection.execute("BEGIN IMMEDIATE")
         account = _account(connection, user_id)
@@ -425,27 +951,39 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
             rows = connection.execute("SELECT * FROM subscriptions WHERE user_id=? AND status='ACTIVE'", (user_id,)).fetchall()
             needle = service.lower().replace(" ", "")
             matched = next((row for row in rows if needle in str(row["merchant"]).lower().replace(" ", "") or str(row["merchant"]).lower().replace(" ", "") in needle), None)
-            if matched:
-                subscription = dict(matched)
-                amount = _money(subscription["amount"])
-                connection.execute("UPDATE subscriptions SET status='CANCELLED' WHERE sub_id=? AND user_id=?", (subscription["sub_id"], user_id))
-                service = subscription["merchant"]
-            else:
-                amount = _price_for(service, _money(params.get("amount")))
-                sub_id = "SUB_AI_" + uuid.uuid4().hex[:10].upper()
-                lowered_service = service.lower()
-                matched_label = next((label for key, label in COMMON_SUBSCRIPTION_LABELS.items() if key in lowered_service), "")
-                merchant = matched_label or (service if any(token in lowered_service for token in ("pro", "svip", "会员", "专业版")) else service + " 连续包月")
-                connection.execute(
-                    "INSERT INTO subscriptions (sub_id,user_id,merchant,amount,cycle,next_deduct_date,status,last_used_at,price_history_json) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
-                    (sub_id, user_id, merchant, amount, "每月", (date.today() + timedelta(days=30)).isoformat(),
-                     "CANCELLED", datetime.now().astimezone().isoformat(timespec="seconds"), json.dumps([{"amount": amount}])),
-                )
-                service = merchant
+            if not matched:
+                connection.execute("ROLLBACK")
+                return {
+                    "status": "error", "summary": f"未找到该订阅「{service}」，未产生任何账务或订阅变更。",
+                    "data": {"service_name": service}, "receipt": None, "level": level,
+                }
+            subscription = dict(matched)
+            amount = _money(subscription["amount"])
+            connection.execute("UPDATE subscriptions SET status='CANCELLED' WHERE sub_id=? AND user_id=?", (subscription["sub_id"], user_id))
+            service = subscription["merchant"]
+            undo_action = {"action": "restore_subscription", "params": {
+                "sub_id": str(subscription["sub_id"]), "service_name": service,
+            }}
             annual = round(amount * 12, 2)
             summary = f"已终止「{service}」自动扣款授权，预计每年节省 ¥{annual:.2f}。"
             data = {"service_name": service, "amount": amount, "annual_savings": annual, "status": "CANCELLED"}
+
+        elif name == "restore_subscription":
+            sub_id = str(params.get("sub_id") or "")
+            subscription = connection.execute(
+                "SELECT * FROM subscriptions WHERE sub_id=? AND user_id=?", (sub_id, user_id)
+            ).fetchone()
+            if not subscription:
+                raise ValueError("未找到可恢复的订阅记录")
+            connection.execute(
+                "UPDATE subscriptions SET status='ACTIVE' WHERE sub_id=? AND user_id=?", (sub_id, user_id)
+            )
+            service = str(subscription["merchant"])
+            undo_action = {"action": "cancel_subscription", "params": {
+                "service_name": service, "amount": _money(subscription["amount"]),
+            }}
+            summary = f"已恢复「{service}」的周期代扣授权，后续将按原协议日期扣款。"
+            data = {"sub_id": sub_id, "service_name": service, "status": "ACTIVE"}
 
         elif name == "subscribe_service":
             amount = _money(params["amount"])
@@ -516,6 +1054,9 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
                                        (pocket_id, user_id, "◆", pocket_name, amount, 1, datetime.now().astimezone().isoformat(timespec="seconds")))
                 transaction_id = _append_transaction(connection, user_id, account["account_id"], "专项资金口袋", pocket_name, amount, balance_after)
                 summary = f"已向「{pocket_name}」专项口袋划入 ¥{amount:.2f}，账户活期余额 ¥{balance_after:.2f}。"
+                undo_action = {"action": "manage_pocket", "params": {
+                    "operation": "withdraw", "name": pocket_name, "amount": amount,
+                }}
             else:
                 if not pocket:
                     raise ValueError("未找到指定资金口袋")
@@ -530,6 +1071,9 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
                 pocket_id = pocket["pocket_id"]
                 transaction_id = _append_transaction(connection, user_id, account["account_id"], "专项资金赎回", pocket_name, amount, balance_after, direction="IN")
                 summary = f"已从「{pocket_name}」取出 ¥{amount:.2f} 返回活期账户。"
+                undo_action = {"action": "manage_pocket", "params": {
+                    "operation": "deposit", "name": pocket_name, "amount": amount,
+                }}
             data = {"pocket_id": pocket_id, "name": pocket_name, "amount": amount, "operation": operation,
                     "balance_after": balance_after, "transaction_id": transaction_id}
 
@@ -539,30 +1083,59 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
                 raise ValueError("未找到对应银行卡")
             operation = params["operation"]
             value = params.get("value")
+            card_tail = str(card["card_no"])[-4:]
             if operation == "freeze":
+                previous_status = str(card["status"])
                 connection.execute("UPDATE cards SET status='FROZEN' WHERE card_id=?", (card["card_id"],))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的银行卡已临时止付。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "unfreeze" if previous_status != "FROZEN" else "freeze",
+                }}
             elif operation == "unfreeze":
+                previous_status = str(card["status"])
                 connection.execute("UPDATE cards SET status='ACTIVE' WHERE card_id=?", (card["card_id"],))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的银行卡已解除冻结。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "freeze" if previous_status == "FROZEN" else "unfreeze",
+                }}
             elif operation == "overseas_lock":
+                previous_value = bool(card["overseas_lock"])
                 connection.execute("UPDATE cards SET overseas_lock=? WHERE card_id=?", (1 if value else 0, card["card_id"]))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的境外交易锁已{'开启' if value else '关闭'}。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "overseas_lock", "value": previous_value,
+                }}
             elif operation == "night_lock":
+                previous_value = bool(card["night_lock"])
                 connection.execute("UPDATE cards SET night_lock=? WHERE card_id=?", (1 if value else 0, card["card_id"]))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的夜间安全锁已{'开启' if value else '关闭'}。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "night_lock", "value": previous_value,
+                }}
             elif operation == "recurring_lock":
+                previous_value = bool(card["recurring_debit_lock"])
                 connection.execute("UPDATE cards SET recurring_debit_lock=? WHERE card_id=?", (1 if value else 0, card["card_id"]))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的周期免密代扣总闸已{'关闭' if value else '恢复'}。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "recurring_lock", "value": previous_value,
+                }}
             elif operation == "atm_lock":
+                previous_value = bool(card["atm_magnet_lock"])
                 connection.execute("UPDATE cards SET atm_magnet_lock=? WHERE card_id=?", (1 if value else 0, card["card_id"]))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的 ATM 与磁条交易保护已{'开启' if value else '关闭'}。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "atm_lock", "value": previous_value,
+                }}
             elif operation == "adjust_limit":
                 limit = _money(value)
                 if limit <= 0:
                     raise ValueError("卡片限额必须大于零")
+                previous_limit = _money(card["daily_limit"])
                 connection.execute("UPDATE cards SET daily_limit=? WHERE card_id=?", (limit, card["card_id"]))
                 summary = f"尾号 {str(card['card_no'])[-4:]} 的单日限额已调整为 ¥{limit:.2f}。"
+                undo_action = {"action": "card_control", "params": {
+                    "card_tail": card_tail, "operation": "adjust_limit", "value": previous_limit,
+                }}
             else:
                 raise ValueError("不支持的卡片操作")
             balance_after = balance
@@ -630,6 +1203,7 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
         else:
             raise ValueError("不支持的业务动作")
 
+        _save_action_state(connection, user_id, action, undo_action)
         connection.execute("COMMIT")
     except Exception:
         try:
@@ -672,20 +1246,44 @@ class AIBankingAssistant:
             return {"status": "OFFLINE", "channel": "local_rule_fallback", "model": "local-semantic",
                     "latency_ms": None, "error": str(exc)[:160]}
 
-    def _cloud_reply(self, message: str, context: dict[str, Any], elder_mode: bool) -> dict[str, Any] | None:
-        context_text = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    def _conversation_context(self, user_id: str, current_message: str) -> list[dict[str, str]]:
+        try:
+            messages = workspace.get_chat_messages(user_id, limit=13)
+        except Exception:
+            messages = []
+        if messages and messages[-1].get("role") == "user" and str(messages[-1].get("content") or "") == str(current_message):
+            messages = messages[:-1]
+        conversation: list[dict[str, str]] = []
+        for row in messages[-12:]:
+            role = str(row.get("role") or "user")
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(row.get("content") or "")
+            if role == "assistant":
+                content = _extract_json_action(content)[1] or content
+            conversation.append({"role": role, "content": _mask_card_numbers(content)[:1200]})
+        return conversation
+
+    def _cloud_reply(self, message: str, context: dict[str, Any], elder_mode: bool,
+                     conversation: list[dict[str, str]] | None = None,
+                     action_state: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        context_text = _mask_card_numbers(json.dumps(context, ensure_ascii=False, separators=(",", ":")))
+        state_text = _mask_card_numbers(json.dumps(action_state or {}, ensure_ascii=False, separators=(",", ":")))
         started = time.perf_counter()
         try:
+            messages: list[dict[str, str]] = [
+                {"role": "system", "content": SYSTEM_PROMPT + "\n当前账户上下文（只读）：" + context_text +
+                 "\n最近动作状态（仅用于会话承接，不代表已授权）：" + state_text +
+                 "\n当前模式：" + ("长辈关怀模式，请用温和、简短、清晰的表达。" if elder_mode else "标准私人银行模式。")},
+            ]
+            messages.extend(conversation or [])
+            messages.append({"role": "user", "content": message})
             response = httpx.post(
                 config.GATEWAY_BASE_URL.rstrip("/") + "/chat/completions",
                 headers={"X-App-Secret": config.GATEWAY_APP_SECRET, "Content-Type": "application/json"},
                 json={
                     "model": config.GATEWAY_MODEL,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT + "\n当前账户上下文（只读）：" + context_text +
-                         "\n当前模式：" + ("长辈关怀模式，请用温和、简短、清晰的表达。" if elder_mode else "标准私人银行模式。")},
-                        {"role": "user", "content": message},
-                    ],
+                    "messages": messages,
                     "temperature": 0.15,
                     "max_tokens": 650,
                 },
@@ -743,7 +1341,8 @@ class AIBankingAssistant:
             total = round(sum(_money(row.get("amount")) for row in holdings), 2)
             return f"当前理财持仓合计 ¥{total:.2f}。您可以让我追加申购或快速赎回至活期账户。"
         if elder_mode:
-            return "张叔叔，我已经核对过您的账户和风控状态。我可以帮您查账、管理订阅、锁定银行卡，或者走正规授权流程办理转账。"
+            name = str(context.get("user", {}).get("name") or "您好")
+            return f"{name}，我已经核对过您的账户和风控状态。我可以帮您查账、管理订阅、锁定银行卡，或者走正规授权流程办理转账。"
         return "我已核验当前账户与风控上下文。您可以让我分析账单、管理代扣、调整专项资金口袋或银行卡安全设置。"
 
     def _oral_brief(self, message: str, visible: str, action: dict[str, Any] | None,
@@ -751,7 +1350,8 @@ class AIBankingAssistant:
         account = context.get("account", {})
         analytics = context.get("bill_analytics", {})
         subscriptions = context.get("subscriptions", [])
-        salutation = "张叔叔" if elder_mode else str(context.get("user", {}).get("name") or "您好") + "您好"
+        profile_name = str(context.get("user", {}).get("name") or "您好")
+        salutation = profile_name if elder_mode else profile_name + "您好"
         params = (action or {}).get("params", {})
         if action:
             if action.get("action") == "transfer":
@@ -803,28 +1403,103 @@ class AIBankingAssistant:
                     "tts_text": reply}
 
         context = build_account_context(user_id)
-        cloud = self._cloud_reply(message, context, elder_mode)
-        query_only = (
-            any(word in message for word in ("检查", "查询", "查看", "多少钱", "明细", "分析", "是什么", "如何", "怎么"))
-            and not any(word in message for word in ("退订", "取消", "关掉", "订阅", "开通", "转账", "转给", "冻结", "止付", "锁定", "限额", "存入", "取出", "赎回"))
-        )
-        if cloud:
-            action, visible = _extract_json_action(cloud["content"])
-            normalized = None if query_only else _normalize_action(action)
-            if normalized is None:
-                normalized = None if query_only else infer_action(message)
-            if query_only:
-                visible = self._local_reply(message, context, elder_mode)
-            if not visible:
-                visible = self._local_reply(message, context, elder_mode)
-            latency = cloud["latency_ms"]
-            channel = "tencent_gateway"
-        else:
-            normalized = infer_action(message)
-            visible = self._local_reply(message, context, elder_mode)
-            latency = None
-            channel = "local_semantic"
+        query_only = _is_read_only_message(message)
+        action_state = _load_action_state(user_id)
+        identity_claim = bool(re.search(
+            r"(?:我是你(?:的)?主人|我是管理员|我是系统管理员|我命令你|以.{0,8}身份(?:命令|要求))", message
+        ))
+        clarification: dict[str, Any] | None = None
+        normalized: dict[str, Any] | None = None
+        cloud: dict[str, Any] | None = None
+        conversation: list[dict[str, str]] = []
+
+        if _is_undo_request(message):
+            undo_payload = action_state.get("undo_payload")
+            normalized = _normalize_action(undo_payload)
+            if normalized:
+                normalized, clarification = _validate_action_entities(user_id, normalized, message, context)
+                visible = "我已定位到上一笔可逆操作。恢复或反向操作仍需通过下方授权卡确认，确认前账本不会改变。"
+            else:
+                clarification = _clarification(
+                    "当前没有可撤销的近期操作，或上一笔业务不支持自动撤回。",
+                    ["查看最近交易", "查看我的订阅", "联系人工客服"],
+                    reply_text="当前没有找到可撤回的近期操作。为避免误操作，我没有取消任何其他订阅或资金设置。",
+                    tool_name="undo_action", scene="会话纠错",
+                )
+                visible = clarification["reply_text"]
+            latency = 0
+            channel = "session_undo"
             self.last_channel = channel
+        else:
+            conversation = self._conversation_context(user_id, message)
+            cloud = self._cloud_reply(
+                message, context, elder_mode,
+                conversation=conversation, action_state=action_state,
+            )
+            if cloud:
+                action, visible = _extract_json_action(cloud["content"])
+                attempted_action = None if query_only else action
+                if attempted_action:
+                    normalized = _normalize_action(attempted_action)
+                    if normalized:
+                        normalized, clarification = _validate_action_entities(user_id, normalized, message, context)
+                    else:
+                        clarification = _clarification(
+                            "模型返回的业务动作不完整或不在许可白名单中，请补充明确的对象与金额。",
+                            ["查看我的账户", "取消本次操作"], tool_name="action_validation", scene="安全校验",
+                        )
+                elif not query_only:
+                    candidate = _normalize_action(infer_action(message))
+                    if candidate:
+                        _, clarification = _validate_action_entities(user_id, candidate, message, context)
+                if not visible:
+                    visible = self._local_reply(message, context, elder_mode)
+                latency = cloud["latency_ms"]
+                channel = "tencent_gateway"
+            else:
+                normalized = _normalize_action(infer_action(message))
+                if normalized:
+                    normalized, clarification = _validate_action_entities(user_id, normalized, message, context)
+                visible = self._local_reply(message, context, elder_mode)
+                latency = None
+                channel = "local_semantic"
+                self.last_channel = channel
+
+        pronoun_resubscribe = bool(
+            re.search(r"(?:重新订阅|恢复订阅|再次订阅)", message)
+            and any(token in message for token in ("他们", "她们", "这个", "那个", "它", "这些", "那些"))
+        )
+        if pronoun_resubscribe and clarification is None:
+            cancelled = [row for row in _subscription_rows(user_id) if row.get("status") == "CANCELLED"]
+            options = [f"重新订阅 {row['merchant']}" for row in cancelled]
+            options.extend(f"重新订阅 {label}" for label in COMMON_SUBSCRIPTION_LABELS.values())
+            clarification = _clarification(
+                "请明确要重新订阅哪项服务。", options[:6],
+                reply_text="需要先确认具体服务名称，不能把“他们”或其他代词当作订阅名称。",
+                tool_name="subscribe_service", scene="订阅管理",
+            )
+            normalized = None
+
+        if clarification is not None:
+            if identity_claim:
+                note = "身份声明不会改变账户权限，也不会绕过银行授权流程。"
+                clarification["reply_text"] = note + " " + str(clarification.get("question") or "")
+                clarification["summary"] = clarification["reply_text"]
+                clarification["elder_voice_text"] = clarification["reply_text"]
+            clarification.update({
+                "route_channel": channel,
+                "model": cloud.get("model") if cloud else "local-semantic",
+                "latency_ms": latency,
+                "bank_action": None,
+                "authorization_level": None,
+                "remaining_limit": _money(context["risk_limit"]["remaining"]),
+                "daily_limit": _money(context["risk_limit"]["daily_limit"]),
+                "tts_text": clarification["reply_text"],
+            })
+            return clarification
+
+        if identity_claim:
+            visible = "身份声明不会改变账户权限，也不会绕过银行授权流程。" + visible
         level = "L1"
         remaining = _money(context["risk_limit"]["remaining"])
         daily_limit = _money(context["risk_limit"]["daily_limit"])
@@ -842,9 +1517,17 @@ class AIBankingAssistant:
             "status": "SUCCESS",
             "reply_text": visible.strip(),
             "route_channel": channel,
-            "model": config.GATEWAY_MODEL if cloud else "local-semantic",
+            "model": cloud.get("model") if cloud else "local-semantic",
             "latency_ms": latency,
             "bank_action": normalized,
+            "tool_name": normalized.get("action") if normalized else "assistant_chat",
+            "scene": "智能银行对话",
+            "risk_level": "RED" if level == "L3" else "YELLOW" if level == "L2" else "GREEN",
+            "risk_reason": "动作已进入分级授权流程" if normalized else "只读查询或安全澄清",
+            "summary": visible.strip(),
+            "data": {"grounded_context": True},
+            "ground_truth_numbers": [remaining, daily_limit] if normalized else [],
+            "rollback_token": None,
             "authorization_level": level if normalized else None,
             "remaining_limit": remaining,
             "daily_limit": daily_limit,
@@ -860,6 +1543,7 @@ __all__ = [
     "AIBankingAssistant",
     "ai_banking_assistant",
     "infer_action",
+    "parse_chinese_amount",
     "execute_action",
     "authorization_level",
     "build_account_context",

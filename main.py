@@ -360,6 +360,8 @@ def _assistant_action_reply(action: dict[str, Any], level: str, remaining: float
     params = action.get("params", {})
     if name == "cancel_subscription":
         return f"已定位「{params.get('service_name')}」自动扣款协议。完成确认后才会解除授权，当前尚未修改账本。"
+    if name == "restore_subscription":
+        return f"已定位「{params.get('service_name') or params.get('sub_id')}」的已取消协议。完成确认后才会恢复扣款授权，当前尚未修改账本。"
     if name == "subscribe_service":
         return f"已识别到「{params.get('service_name')}」付费订阅，月费 ¥{float(params.get('amount', 0)):.2f}。完成下方 L2 授权后，系统才会扣款并创建自动续费协议。"
     if name == "transfer":
@@ -449,6 +451,12 @@ def assistant_chat(request: AssistantChatRequest, x_session_token: str | None = 
     authorization = None
     receipt_data = None
     reply = result.get("reply_text") or "已完成账户核验。"
+    clarification = None
+    if result.get("status") == "CLARIFICATION_NEEDED":
+        clarification = {
+            "question": result.get("question") or reply,
+            "options": [str(option) for option in result.get("options", []) if str(option).strip()],
+        }
     if action:
         proposal = policy.create_proposal(user_id, action)
         authorization = dict(proposal["card"])
@@ -461,10 +469,17 @@ def assistant_chat(request: AssistantChatRequest, x_session_token: str | None = 
             float(authorization.get("daily_limit", 1000)),
         )
     receipt_payload = {}
-    tts_text = _tts_summary(user_id, reply, action, authorization.get("level") if authorization else None)
+    tts_text = (
+        str(result.get("tts_text") or reply)
+        if clarification
+        else _tts_summary(user_id, reply, action, authorization.get("level") if authorization else None)
+    )
     result["tts_text"] = tts_text
     if tts_text:
         receipt_payload["ttsText"] = tts_text
+    if clarification:
+        receipt_payload["clarification"] = clarification
+        receipt_payload["status"] = "CLARIFICATION_NEEDED"
     if authorization:
         stored_authorization = dict(authorization)
         stored_authorization.pop("confirm_token", None)

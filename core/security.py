@@ -312,11 +312,11 @@ class InputSecurityShield:
         fraud = [p.pattern for p in self.FRAUD_PATTERNS if p.search(text)]
         if fraud:
             circuit_breaker.record_event_and_check(user_id, risk_delta=60, is_failure=False)
-            name = "张大爷"
+            name = "您好"
             try:
                 row = database.fetch_all("SELECT name FROM users WHERE user_id=?", (_canonical_user(user_id),))
                 if row:
-                    name = "张叔叔" if int(database.fetch_all("SELECT age FROM users WHERE user_id=?", (_canonical_user(user_id),))[0]["age"]) >= 60 else row[0]["name"]
+                    name = str(row[0]["name"] or "您好")
             except (sqlite3.Error, KeyError, TypeError, ValueError):
                 name = "您好"
             result = {"passed": False, "threat_type": "TELECOM_FRAUD_RISK", "risk_score_delta": 60,

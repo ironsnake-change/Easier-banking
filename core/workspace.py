@@ -285,6 +285,14 @@ def _seed_linyan(connection: sqlite3.Connection) -> None:
             "INSERT INTO wealth_holdings (holding_id,user_id,product_id,amount,accrued_profit,purchased_at) VALUES (?,?,?,?,?,?)",
             ("HOLD_LY_01", user_id, "PROD_01", 30000.0, 412.5, "2026-05-18 10:00:00"),
         )
+    connection.executemany(
+        "INSERT OR IGNORE INTO subscriptions "
+        "(sub_id,user_id,merchant,amount,cycle,next_deduct_date,status) VALUES (?,?,?,?,?,?,?)",
+        [
+            ("SUB_LY_MUSESCORE", user_id, "MuseScore Pro 专业版乐谱订阅", 38.0, "每月20日", "2026-11-20", "ACTIVE"),
+            ("SUB_LY_NETFLIX", user_id, "Netflix Premium 连续订阅", 68.0, "每月12日", "2026-11-12", "ACTIVE"),
+        ],
+    )
     _insert_auth(connection, "linyan", user_id, "8848", "standard")
     _insert_preference(connection, user_id, False)
     _insert_pockets(connection, user_id, [("✈️", "川西旅行基金", 2000.0, 1), ("💻", "数码装备储备", 4500.0, 0)])
@@ -518,6 +526,7 @@ def reset_workspace_data(db_path: str | Path | None = None) -> Path:
         for table in (
             "action_proposals", "limit_overrides", "audit_outbox",
             "app_sessions", "chat_messages", "pockets", "user_preferences", "auth_accounts",
+            "ai_session_state",
         ):
             connection.execute(f"DROP TABLE IF EXISTS {table}")
         connection.commit()

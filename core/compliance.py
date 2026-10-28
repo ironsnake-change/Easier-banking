@@ -31,7 +31,7 @@ def is_clearly_off_topic(text: str) -> bool:
 
 def refusal_text(elder_mode: bool, name: str = "") -> str:
     if elder_mode:
-        elder_name = "张叔叔" if name == "张建国" else (name or "叔叔")
+        elder_name = str(name or "您好").strip()
         return f"{elder_name}，{ELDER_REFUSAL}"
     return STANDARD_REFUSAL
 

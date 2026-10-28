@@ -134,7 +134,9 @@ class BankingAgent:
                     known_numbers.extend(item.result.get("ground_truth_numbers", []))
             grounding = {"grounded_numbers": known_numbers}
         clean = self.gateway.inspect_and_sanitize_output(reply, grounding.get("grounded_numbers", []) if grounding else [], "banking")
-        voice = ("张叔叔，" + clean["sanitized_text"]) if elder else clean["sanitized_text"]
+        profile = workspace.get_user_profile(task.user_id)
+        profile_name = str(profile.get("name") or "您好")
+        voice = (profile_name + "，" + clean["sanitized_text"]) if elder else clean["sanitized_text"]
         return {"status": status, "reply_text": clean["sanitized_text"], "elder_voice_text": voice,
                 "route_channel": self.router.last_channel, "dag": {"dag_id": task.dag_id,
                 "overall_status": task.overall_status, "nodes": [asdict(node) for node in task.nodes],

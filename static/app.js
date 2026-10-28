@@ -818,6 +818,7 @@
   function actionLabel(action) {
     return {
       cancel_subscription: "周期代扣拦截",
+      restore_subscription: "恢复周期代扣授权",
       subscribe_service: "新增付费订阅",
       transfer: "账户转账",
       manage_pocket: "专项资金口袋",
@@ -1535,6 +1536,24 @@
     }).join("") + '</div>' : "";
   }
 
+  function clarificationForMessage(message) {
+    var source = message && message.receipt && message.receipt.clarification;
+    if (!source || !source.options) return null;
+    var options = ensureArray(source.options).map(function (option) {
+      return typeof option === "string" ? option : String(option && option.label || "");
+    }).filter(Boolean);
+    return options.length ? { question: String(source.question || ""), options: options } : null;
+  }
+
+  function renderClarificationOptions(message, index) {
+    var clarification = clarificationForMessage(message);
+    if (!clarification) return "";
+    return '<div class="clarification-options" role="group" aria-label="请选择回复">' +
+      clarification.options.slice(0, 6).map(function (option, optionIndex) {
+        return '<button type="button" data-clarification-option="' + optionIndex + '" data-message-index="' + index + '">' + esc(option) + '</button>';
+      }).join("") + '</div>';
+  }
+
   function renderChat() {
     var target = byId("chatMessages");
     if (!target || !state.data) return;
@@ -1555,7 +1574,7 @@
       var badge = receipt ? '<button class="receipt-badge" type="button" data-receipt-id="' + esc(receipt.receipt_id) + '">🧾 已生成电子回单 #' + esc(receipt.receipt_id) + '</button>' : "";
       if (compliance) badge += '<span class="compliance-badge">🛡️ 业务合规边界提示</span>';
       var menu = isUser ? "" : '<div class="message-tools"><button class="more-button" type="button" aria-label="消息操作">⋯</button><div class="message-menu"><button type="button" data-message-action="copy" data-message-index="' + index + '">📋 复制</button><button type="button" data-message-action="speak" data-message-index="' + index + '">🔊 朗读</button>' + (receipt ? '<button type="button" data-message-action="receipt" data-message-index="' + index + '">🧾 追溯回单</button>' : '') + '</div></div>';
-      return '<article class="message-row ' + (isUser ? "user" : "assistant") + '" data-message-row="' + index + '"><div class="message-bubble"><div class="message-text">' + esc(display) + '</div>' + (isUser ? "" : miniSummaryPills(message)) + '</div>' + (isUser ? "" : renderAuthorizationCard(message, index)) + '<div class="message-meta"><span>Easier-banking · ' + esc(formatMessageTime(message.created_at)) + '</span>' + badge + '</div>' + menu + '</article>';
+      return '<article class="message-row ' + (isUser ? "user" : "assistant") + '" data-message-row="' + index + '"><div class="message-bubble"><div class="message-text">' + esc(display) + '</div>' + (isUser ? "" : miniSummaryPills(message)) + '</div>' + (isUser ? "" : renderClarificationOptions(message, index)) + (isUser ? "" : renderAuthorizationCard(message, index)) + '<div class="message-meta"><span>Easier-banking · ' + esc(formatMessageTime(message.created_at)) + '</span>' + badge + '</div>' + menu + '</article>';
     }).join("");
     if (typing) {
       html += '<article class="message-row assistant"><div class="message-bubble typing-bubble"><i></i><i></i><i></i></div><div class="message-meta">安全推理中 · 本地账本只读校验</div></article>';
@@ -1589,6 +1608,14 @@
     });
     all("[data-auth-cancel]", target).forEach(function (button) {
       button.onclick = function () { cancelAuthorization(Number(button.getAttribute("data-auth-cancel"))); };
+    });
+    all("[data-clarification-option]", target).forEach(function (button) {
+      button.onclick = function () {
+        var message = renderedMessages[Number(button.getAttribute("data-message-index"))];
+        var clarification = clarificationForMessage(message);
+        var option = clarification && clarification.options[Number(button.getAttribute("data-clarification-option"))];
+        if (option) sendMessage(option);
+      };
     });
     all(".more-button", target).forEach(function (button) {
       button.onclick = function (event) {
