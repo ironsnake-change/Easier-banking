@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import json
 import re
-import secrets
 from pathlib import Path
 from typing import Any
 
@@ -15,14 +14,11 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from core import config, database, workspace
+from core import config, database, policy, workspace
 from core.ai_banking import (
-    ACTION_LABELS,
     ai_banking_assistant,
-    authorization_level,
-    execute_action as execute_bank_action,
 )
 from core.agent import banking_agent
 from core.compliance import is_clearly_off_topic, refusal_text
@@ -130,7 +126,7 @@ def build_live_state(user_id: str = DEFAULT_USER) -> dict[str, Any]:
             "available_balance": float(primary["balance"]),
             "locked_balance": float(primary["locked_balance"]),
             "daily_transfer_used": float(user["daily_transfer_used"]),
-            "daily_transfer_limit": float(preferences.get("transfer_threshold", 1000.0)),
+            "daily_transfer_limit": policy.effective_daily_limit(user_id),
             "elderly_mode": elder,
         },
         "greeting": (f"张叔叔，您好。今天也陪您把每一笔钱看清楚。" if user_id == DEFAULT_USER and elder
@@ -177,6 +173,7 @@ def build_live_state(user_id: str = DEFAULT_USER) -> dict[str, Any]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     workspace.ensure_workspace_schema()
+    policy.ensure_schema()
     yield
 
 
@@ -215,7 +212,6 @@ class ResumeRequest(BaseModel):
     pending_action_id: str
     action: str = "approve"
     sms_code: str | None = None
-    face_verified: bool = False
     user_id: str = "U001"
     elder_mode: bool | None = None
 
@@ -258,16 +254,18 @@ class AssistantChatRequest(BaseModel):
     elder_mode: bool | None = None
 
 
-class AssistantExecuteRequest(BaseModel):
-    message_id: int
-    temporary_limit_raise: bool = False
-    cancel: bool = False
-
-
-class BankActionRequest(BaseModel):
+class ProposeActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     action: dict[str, Any]
-    confirmed: bool = False
-    temporary_limit_raise: bool = False
+    message_id: int | None = None
+
+
+class ConfirmProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    proposal_id: str = Field(min_length=8, max_length=64)
+    confirm_token: str = Field(min_length=20, max_length=128)
+    otp: str | None = Field(default=None, max_length=12)
+    cancel: bool = False
 
 
 @app.get("/")
@@ -326,7 +324,10 @@ def logout(x_session_token: str | None = Header(default=None, alias="X-Session-T
 
 @app.get("/api/state")
 def get_state(user_id: str = "U001", x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
-    return build_live_state(_session_user(x_session_token, user_id))
+    resolved_user = _session_user(x_session_token, user_id)
+    policy.expire_stale_proposals(resolved_user)
+    policy.pruned_overrides(resolved_user)
+    return build_live_state(resolved_user)
 
 
 @app.get("/api/chat/history")
@@ -354,49 +355,37 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
     return result
 
 
-def _authorization_card(user_id: str, action: dict[str, Any], level: str,
-                        remaining: float, daily_limit: float) -> dict[str, Any]:
-    params = action.get("params", {})
-    amount = float(params.get("amount") or (params.get("value") if action.get("action") == "card_control" and params.get("operation") == "adjust_limit" else 0) or 0)
-    card_tail = str(params.get("card_tail") or "")
-    if not card_tail:
-        account_rows = database.fetch_all("SELECT card_no FROM cards WHERE user_id=? ORDER BY card_id LIMIT 1", (user_id,))
-        card_tail = str(account_rows[0]["card_no"])[-4:] if account_rows else ""
-    return {
-        "authorization_id": "AUTH-" + secrets.token_hex(5).upper(),
-        "level": level,
-        "status": "PENDING",
-        "action": action,
-        "business_type": ACTION_LABELS.get(action.get("action"), "账户操作"),
-        "target": params.get("recipient") or params.get("service_name") or params.get("name") or params.get("card_tail") or "当前账户",
-        "amount": round(amount, 2),
-        "card_tail": card_tail,
-        "remaining_limit": round(remaining, 2),
-        "daily_limit": round(daily_limit, 2),
-        "raise_to": max(5000.0, round(amount + (daily_limit - remaining), 2)) if level == "L3" else None,
-    }
-
-
 def _assistant_action_reply(action: dict[str, Any], level: str, remaining: float, daily_limit: float) -> str:
     name = action.get("action")
     params = action.get("params", {})
+    if name == "cancel_subscription":
+        return f"已定位「{params.get('service_name')}」自动扣款协议。完成确认后才会解除授权，当前尚未修改账本。"
     if name == "subscribe_service":
         return f"已识别到「{params.get('service_name')}」付费订阅，月费 ¥{float(params.get('amount', 0)):.2f}。完成下方 L2 授权后，系统才会扣款并创建自动续费协议。"
     if name == "transfer":
         amount = float(params.get("amount", 0))
         if level == "L3":
-            return f"本次拟向 {params.get('recipient')} 转账 ¥{amount:.2f}，超过今日剩余额度 ¥{remaining:.2f}。请选择临时提额并完成强验证，或取消交易。"
+            if amount > remaining:
+                return f"本次拟向 {params.get('recipient')} 转账 ¥{amount:.2f}，超过今日剩余额度 ¥{remaining:.2f}。请确认临时额度并完成一次性验证码验证。"
+            return f"本次拟向尚未登记的收款人 {params.get('recipient')} 首次转账 ¥{amount:.2f}。请核查收款人并完成一次性验证码验证。"
         return f"已识别到向 {params.get('recipient')} 转账 ¥{amount:.2f} 的指令。请核对下方交易安全授权卡，确认前不会扣款。"
     if name == "manage_pocket":
         operation = params.get("operation")
         verb = "取出" if operation == "withdraw" else "划入"
         return f"已识别到专项口袋「{params.get('name')}」{verb} ¥{float(params.get('amount', 0)):.2f} 的指令，请完成 L2 授权后执行。"
     if name == "card_control":
-        return "已生成银行卡风控变更指令。该操作需要 L2 授权，确认后将立即同步卡面、开关状态与审计链。"
+        if level == "L1":
+            return "这是保护性银行卡安全操作，点击确认卡后会立即生效，无需验证码。"
+        if level == "L3":
+            return "关闭安全锁、解冻或提高卡片限额属于风险扩张操作，确认后还需要一次性验证码。"
+        return "银行卡设置变更需要确认，当前尚未修改卡面或交易权限。"
     if name == "redeem_wealth":
         return f"已生成理财赎回指令，涉及金额 ¥{float(params.get('amount', 0)):.2f}。确认后将实时返回活期账户。"
     if name == "subscribe_wealth":
         return f"已生成理财申购追加指令，涉及金额 ¥{float(params.get('amount', 0)):.2f}。确认后将从活期账户划入持仓。"
+    if name == "limit_change":
+        level_text = "确认并完成一次性验证码验证" if level == "L3" else "确认"
+        return f"单日风控限额拟调整为 ¥{float(params.get('value', 0)):.2f}，请{level_text}后生效。基础限额和临时额度分开管理。"
     return "已生成真实账本业务指令，请核对下方授权卡。"
 
 
@@ -459,34 +448,33 @@ def assistant_chat(request: AssistantChatRequest, x_session_token: str | None = 
     action = result.get("bank_action")
     authorization = None
     receipt_data = None
-    executed = None
     reply = result.get("reply_text") or "已完成账户核验。"
     if action:
-        level = result.get("authorization_level") or authorization_level(user_id, action)[0]
-        remaining = float(result.get("remaining_limit", 0))
-        daily_limit = float(result.get("daily_limit", 1000))
-        authorization = _authorization_card(user_id, action, level, remaining, daily_limit)
-        if level == "L1":
-            try:
-                executed = execute_bank_action(user_id, action, level=level)
-                receipt_data = executed.get("receipt")
-                authorization.update({"status": "AUTHORIZED", "executed_at": _now_display()})
-                reply = str(executed.get("summary") or reply).rstrip() + " ✓ 业务已即时办结 · 审计哈希已生成"
-            except Exception as exc:
-                reply = reply.rstrip() + " 本次保护性操作未能执行：" + str(exc)
-                authorization.update({"status": "FAILED", "error": str(exc)})
-        else:
-            reply = _assistant_action_reply(action, level, remaining, daily_limit)
+        proposal = policy.create_proposal(user_id, action)
+        authorization = dict(proposal["card"])
+        authorization["confirm_token"] = proposal["confirm_token"]
+        authorization["demo_hint"] = proposal.get("demo_hint")
+        authorization["requires_otp"] = proposal.get("requires_otp", False)
+        reply = _assistant_action_reply(
+            action, proposal["level"],
+            float(authorization.get("remaining_limit", 0)),
+            float(authorization.get("daily_limit", 1000)),
+        )
     receipt_payload = {}
-    tts_text = _tts_summary(user_id, reply, action, level if action else None, executed)
+    tts_text = _tts_summary(user_id, reply, action, authorization.get("level") if authorization else None)
     result["tts_text"] = tts_text
     if tts_text:
         receipt_payload["ttsText"] = tts_text
     if authorization:
-        receipt_payload["authorization"] = authorization
+        stored_authorization = dict(authorization)
+        stored_authorization.pop("confirm_token", None)
+        stored_authorization.pop("demo_hint", None)
+        receipt_payload["authorization"] = stored_authorization
     if receipt_data:
         receipt_payload.update({"status": "COMPLETED", "receiptData": receipt_data, "created_at": _now_display()})
     message_id = workspace.append_chat_message(user_id, "assistant", reply, receipt_payload)
+    if authorization:
+        policy.attach_message(user_id, authorization["proposal_id"], message_id)
     result["reply_text"] = reply
     response = {
         **result,
@@ -498,80 +486,96 @@ def assistant_chat(request: AssistantChatRequest, x_session_token: str | None = 
     return response
 
 
-@app.post("/api/assistant/execute")
-def assistant_execute(request: AssistantExecuteRequest, x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
+@app.post("/api/assistant/propose")
+def assistant_propose(request: ProposeActionRequest, x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
     user_id = _session_user(x_session_token)
-    rows = database.fetch_all("SELECT * FROM chat_messages WHERE message_id=? AND user_id=?", (request.message_id, user_id))
-    if not rows:
-        raise HTTPException(status_code=404, detail="待授权消息不存在")
-    row = rows[0]
+    if request.message_id is not None:
+        rows = database.fetch_all(
+            "SELECT message_id FROM chat_messages WHERE message_id=? AND user_id=?",
+            (request.message_id, user_id),
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="目标消息不存在或不属于当前用户")
     try:
-        receipt = json.loads(row["receipt_json"] or "{}")
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=409, detail="授权卡数据损坏") from exc
-    authorization = receipt.get("authorization")
-    if not isinstance(authorization, dict) or authorization.get("status") != "PENDING":
-        raise HTTPException(status_code=409, detail="该授权已处理或已失效")
-    if request.cancel:
-        authorization["status"] = "CANCELLED"
-        authorization["cancelled_at"] = _now_display()
-        receipt["authorization"] = authorization
-        connection = database.get_connection()
-        try:
-            connection.execute("UPDATE chat_messages SET receipt_json=? WHERE message_id=? AND user_id=?",
-                               (json.dumps(receipt, ensure_ascii=False), request.message_id, user_id))
-            connection.commit()
-        finally:
-            connection.close()
-        security_gateway.log_event(user_id, "AI_BANK_ACTION_CANCELLED", authorization.get("business_type", ""), "GREEN",
-                                   {"message_id": request.message_id}, "CANCELLED")
-        return {"status": "CANCELLED", "live_state": build_live_state(user_id)}
-    level = str(authorization.get("level") or "L2")
-    if level == "L3" and not request.temporary_limit_raise:
-        return {"status": "LIMIT_EXCEEDED", "authorization": authorization, "live_state": build_live_state(user_id)}
-    started = datetime.now()
-    try:
-        executed = execute_bank_action(user_id, authorization["action"], level=level,
-                                       temporary_limit_raise=request.temporary_limit_raise)
+        proposal = policy.create_proposal(user_id, request.action, message_id=request.message_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    elapsed_ms = round((datetime.now() - started).total_seconds() * 1000)
-    receipt.update({
-        "status": "COMPLETED",
-        "receiptData": executed.get("receipt"),
-        "summary": executed.get("summary"),
-        "elapsed_ms": elapsed_ms,
-    })
-    receipt["ttsText"] = _tts_summary(user_id, executed.get("summary", ""), authorization.get("action"), level, executed)
-    authorization.update({"status": "AUTHORIZED", "executed_at": _now_display(), "elapsed_ms": elapsed_ms})
-    receipt["authorization"] = authorization
-    connection = database.get_connection()
-    try:
-        updated_content = row["content"].rstrip() + " ✓ 已授权执行"
-        connection.execute("UPDATE chat_messages SET content=?,receipt_json=? WHERE message_id=? AND user_id=?",
-                           (updated_content, json.dumps(receipt, ensure_ascii=False), request.message_id, user_id))
-        connection.commit()
-    finally:
-        connection.close()
-    return {"status": "COMPLETED", "summary": executed.get("summary"), "receiptData": executed.get("receipt"),
-            "authorization": authorization, "elapsed_ms": elapsed_ms, "live_state": build_live_state(user_id)}
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    stored_card = dict(proposal["card"])
+    if request.message_id is not None:
+        rows = database.fetch_all(
+            "SELECT receipt_json FROM chat_messages WHERE message_id=? AND user_id=?",
+            (request.message_id, user_id),
+        )
+        if rows:
+            try:
+                receipt = json.loads(rows[0]["receipt_json"] or "{}")
+            except json.JSONDecodeError:
+                receipt = {}
+            receipt["authorization"] = stored_card
+            connection = database.get_connection()
+            try:
+                connection.execute(
+                    "UPDATE chat_messages SET receipt_json=? WHERE message_id=? AND user_id=?",
+                    (json.dumps(receipt, ensure_ascii=False), request.message_id, user_id),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            policy.attach_message(user_id, proposal["proposal_id"], request.message_id)
+    return {
+        **proposal,
+        "authorization": {**proposal["card"], "confirm_token": proposal["confirm_token"],
+                          "demo_hint": proposal.get("demo_hint")},
+        "live_state": build_live_state(user_id),
+    }
+
+
+@app.post("/api/assistant/confirm")
+def assistant_confirm(request: ConfirmProposalRequest, x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
+    user_id = _session_user(x_session_token)
+    result = policy.confirm_proposal(user_id, request.proposal_id, request.confirm_token,
+                                     otp=request.otp, cancel=request.cancel)
+    if result.get("status") == "NOT_FOUND":
+        raise HTTPException(status_code=404, detail="授权提案不存在")
+    if result.get("status") == "FORBIDDEN":
+        raise HTTPException(status_code=403, detail="提案归属、确认密钥或参数校验失败")
+    if result.get("status") == "OTP_REQUIRED":
+        raise HTTPException(status_code=428, detail={
+            "message": "该操作需要一次性验证码",
+            "remaining_attempts": result.get("remaining_attempts"),
+        })
+    if result.get("status") == "OTP_INVALID":
+        raise HTTPException(status_code=401, detail={
+            "message": "一次性验证码错误",
+            "remaining_attempts": result.get("remaining_attempts"),
+        })
+    if result.get("status") == "CONFLICT":
+        raise HTTPException(status_code=409, detail=result.get("error", "提案已失效或已处理"))
+    if result.get("status") == "ERROR":
+        raise HTTPException(status_code=409, detail=result.get("error", "业务执行失败"))
+    if result.get("action") and result.get("status") == "EXECUTED":
+        result["tts_text"] = _tts_summary(
+            user_id, result.get("summary", ""), result.get("action"), result.get("level"),
+            {"summary": result.get("summary", ""), "receipt": result.get("receiptData")},
+        )
+    result["live_state"] = build_live_state(user_id)
+    return result
+
+
+@app.post("/api/assistant/execute")
+def assistant_execute_deprecated():
+    raise HTTPException(
+        status_code=410,
+        detail="该接口已停用。请先 POST /api/assistant/propose，再 POST /api/assistant/confirm。",
+    )
 
 
 @app.post("/api/assistant/action")
-def assistant_action(request: BankActionRequest, x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
-    user_id = _session_user(x_session_token)
-    level, remaining, daily_limit = authorization_level(user_id, request.action)
-    authorization = _authorization_card(user_id, request.action, level, remaining, daily_limit)
-    if level != "L1" and not request.confirmed:
-        return {"status": "CONFIRMATION_REQUIRED", "authorization": authorization, "live_state": build_live_state(user_id)}
-    try:
-        executed = execute_bank_action(user_id, request.action, level=level,
-                                       temporary_limit_raise=request.temporary_limit_raise)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    authorization.update({"status": "AUTHORIZED", "executed_at": _now_display()})
-    return {"status": "COMPLETED", "summary": executed.get("summary"), "receiptData": executed.get("receipt"),
-            "authorization": authorization, "live_state": build_live_state(user_id)}
+def assistant_action_deprecated():
+    raise HTTPException(
+        status_code=410,
+        detail="该接口已停用。请先 POST /api/assistant/propose，再 POST /api/assistant/confirm。",
+    )
 
 
 @app.post("/api/assistant/probe")
@@ -604,7 +608,7 @@ def resume_dag(request: ResumeRequest, x_session_token: str | None = Header(defa
     elder_mode = bool(workspace.get_preferences(user_id).get("elder_mode", 0)) if request.elder_mode is None else request.elder_mode
     try:
         result = banking_agent.resume_dag_after_auth(request.dag_id, request.pending_action_id, request.action,
-                                                     request.sms_code, request.face_verified, user_id, elder_mode)
+                                                     request.sms_code, user_id, elder_mode)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if result.get("reply_text"):
@@ -635,6 +639,14 @@ def rollback_dag(request: RollbackRequest, x_session_token: str | None = Header(
 @app.post("/api/preferences")
 def update_preferences(request: PreferencesRequest, x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
     user_id = _session_user(x_session_token)
+    current_preferences = workspace.get_preferences(user_id)
+    if request.transfer_threshold is not None and abs(
+        float(request.transfer_threshold) - float(current_preferences.get("transfer_threshold", 1000))
+    ) > 0.001:
+        raise HTTPException(
+            status_code=409,
+            detail="基础风控限额不能通过偏好接口直接修改，请使用 /api/assistant/propose 生成限额变更提案。",
+        )
     values = request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True)
     result = workspace.update_preferences(user_id, values)
     security_gateway.log_event(user_id, "PREFERENCES_UPDATED", "update_preferences", "GREEN", values)
@@ -726,7 +738,7 @@ def verify_chain(x_session_token: str | None = Header(default=None, alias="X-Ses
 def reset_demo(x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
     _session_user(x_session_token)
     workspace.reset_workspace_data()
-    for table in ("audit_logs", "security_sessions", "pending_actions", "agent_dag_tasks"):
+    for table in ("audit_logs", "security_sessions", "pending_action_otp", "pending_actions", "agent_dag_tasks"):
         connection = database.get_connection()
         try:
             connection.execute(f"DROP TABLE IF EXISTS {table}")

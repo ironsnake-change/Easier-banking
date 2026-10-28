@@ -18,14 +18,16 @@ def test_semantic_actions_and_levels_are_grounded(seeded_db):
     cancel = infer_action("帮我退订 MuseScore 的订阅")
     assert cancel["action"] == "cancel_subscription"
     assert cancel["params"]["service_name"] == "MuseScore"
-    assert authorization_level("U2001", cancel)[0] == "L1"
+    assert authorization_level("U2001", cancel)[0] == "L2"
 
     transfer = infer_action("帮我给周叙白转 500 元")
     assert transfer == {
         "action": "transfer",
         "params": {"recipient": "周叙白", "amount": 500.0, "remark": "私人金融助理发起"},
     }
-    assert authorization_level("U2001", transfer)[0] == "L2"
+    assert authorization_level("U2001", transfer)[0] == "L3"
+    known_transfer = infer_action("帮我给房东陈姐转 500 元")
+    assert authorization_level("U2001", known_transfer)[0] == "L2"
     assert authorization_level("U2001", {**transfer, "params": {**transfer["params"], "amount": 2000.0}})[0] == "L3"
 
     card = infer_action("帮我把 8848 卡的境外支付锁死")
@@ -36,16 +38,16 @@ def test_semantic_actions_and_levels_are_grounded(seeded_db):
 
 def test_actions_mutate_balances_subscriptions_and_cards(seeded_db):
     before = database.fetch_all("SELECT balance FROM accounts WHERE user_id='U2001'")[0]["balance"]
-    transfer = infer_action("帮我给周叙白转 300 元")
+    transfer = {"action": "transfer", "params": {"recipient": "房东陈姐", "amount": 300, "remark": "房租"}}
     result = execute_action("U2001", transfer, level="L2")
     assert result["status"] == "success"
     after = database.fetch_all("SELECT balance FROM accounts WHERE user_id='U2001'")[0]["balance"]
     assert round(before - after, 2) == 300.0
     assert database.fetch_all(
-        "SELECT 1 FROM transactions WHERE user_id='U2001' AND merchant='周叙白'"
+        "SELECT 1 FROM transactions WHERE user_id='U2001' AND merchant='房东陈姐'"
     )
 
-    cancel = execute_action("U2001", infer_action("帮我退订 MuseScore 的订阅"), level="L1")
+    cancel = execute_action("U2001", infer_action("帮我退订 MuseScore 的订阅"), level="L2")
     assert cancel["status"] == "success"
     dynamic = database.fetch_all(
         "SELECT merchant,amount,status FROM subscriptions WHERE user_id='U2001' AND merchant LIKE '%MuseScore%'"

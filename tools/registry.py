@@ -5,8 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from core import database
-from core.config import DAILY_SMALL_TRANSFER_LIMIT
+from core import policy
 from . import bill_tools, card_tools, cross_scene_tools, subscription_tools, transfer_tools, wealth_tools
 
 
@@ -78,38 +77,15 @@ def get_openai_tool_schemas() -> list[dict]:
 def evaluate_tool_risk(tool_name: str, arguments: dict | None = None, user_id: str = "U1001") -> dict:
     args = dict(arguments or {})
     level, reason, blocked = "GREEN", "只读查询或低风险操作。", False
-    amount = 0.0
-    if tool_name in {"execute_transfer", "schedule_transfer"}:
-        amount = float(args.get("amount", 0) or 0)
-        rows = database.fetch_all("SELECT daily_transfer_used FROM users WHERE user_id=?", (user_id,))
-        used = float(rows[0]["daily_transfer_used"]) if rows else 0.0
-        daily_after = used + amount
-        payee = str(args.get("payee_id_or_account", ""))
-        contacts = database.fetch_all("SELECT contact_id,is_risky,name,alias FROM contacts WHERE user_id=?", (user_id,))
-        matched = [c for c in contacts if payee == c["contact_id"] or payee == c["name"] or payee in c["alias"].split(",")]
-        if any(int(c["is_risky"]) for c in matched) or any(term in str(args.get("remark", "")) for term in ("安全账户", "公检法", "验资", "解冻费", "高息返利")):
-            level, reason, blocked = "RED", "收款人或用途命中反诈高危规则。", True
-        elif len(matched) > 1:
-            level, reason = "YELLOW", "联系人重名，需要先消歧确认。"
-        elif daily_after > DAILY_SMALL_TRANSFER_LIMIT:
-            level, reason = "RED", f"今日累计将达到 {daily_after:.2f} 元，超过 1000 元阈值，需要短信与人脸验证。"
-        elif amount > 0:
-            level, reason = "YELLOW", "转账需要用户确认，且今日累计不超过 1000 元。"
-    elif tool_name == "redeem_wealth_product":
-        amount = float(args.get("amount", 0) or 0)
-        level, reason = ("RED", "赎回金额超过 5000 元，需强验证。") if amount > 5000 else ("YELLOW", "理财赎回需二次确认。")
-    elif tool_name == "subscribe_wealth_product":
-        level, reason = "RED", "理财申购需适当性复核与强验证。"
-    elif tool_name == "report_card_loss":
-        level, reason = "RED", "银行卡挂失属于敏感操作，需强验证。"
-    elif tool_name == "manage_card_limits_and_lock":
-        action = args.get("action")
-        level = "RED" if action == "unlock" or (action == "overseas_switch" and not args.get("overseas_switch")) else "YELLOW"
-        reason = "卡片保护设置变更需用户确认。"
-    elif tool_name in {"cancel_subscription", "lock_demand_funds", "create_lifestyle_order"}:
-        level, reason = "YELLOW", "该操作会改变代扣、账户资金或创建订单，需要用户确认。"
-    elif tool_name in {"apply_virtual_card", "schedule_transfer", "split_aa_bill"}:
-        level, reason = "YELLOW", "该操作需要用户二次确认。"
+    classified = policy.classify_tool(user_id, tool_name, args)
+    if classified:
+        policy_level = str(classified.get("level", "L3"))
+        level = "RED" if policy_level == "L3" else "YELLOW"
+        reason = "；".join(classified.get("reasons") or ["该操作需要用户确认。"])
+    payee = str(args.get("payee_id_or_account", "")).lower()
+    remark = str(args.get("remark", "")).lower()
+    if any(term in payee + remark for term in ("安全账户", "公检法", "验资", "解冻费", "高息返利")):
+        level, reason, blocked = "RED", "收款人或用途命中反诈高危规则。", True
     if tool_name not in TOOL_REGISTRY:
         blocked, level, reason = True, "RED", "工具未注册，已按默认拒绝策略拦截。"
     return {"tool_name": tool_name, "risk_level": level, "require_confirmation": level != "GREEN",

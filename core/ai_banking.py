@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from core import config, database, workspace
+from core import config, database, policy, workspace
 from core.compliance import is_clearly_off_topic, refusal_text
 from core.receipts import amount_in_chinese
 from core.security import security_gateway
@@ -53,6 +53,7 @@ ALLOWED_ACTIONS = {
     "transfer",
     "manage_pocket",
     "card_control",
+    "limit_change",
     "subscribe_wealth",
     "redeem_wealth",
 }
@@ -63,6 +64,7 @@ ACTION_LABELS = {
     "transfer": "账户转账",
     "manage_pocket": "专项资金口袋",
     "card_control": "银行卡风控变更",
+    "limit_change": "单日风控限额调整",
     "subscribe_wealth": "理财产品申购",
     "redeem_wealth": "理财产品赎回",
 }
@@ -330,76 +332,16 @@ def infer_action(message: str) -> dict[str, Any] | None:
 
 
 def _normalize_action(raw: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(raw, dict):
-        return None
-    name = str(raw.get("action") or "").strip()
-    if name not in ALLOWED_ACTIONS:
-        return None
-    params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
-    clean: dict[str, Any] = {"action": name, "params": {}}
-    if name == "cancel_subscription":
-        service = _clean_service_name(params.get("service_name") or params.get("service") or "")
-        if not service:
-            return None
-        clean["params"] = {"service_name": service, "amount": _money(params.get("amount"))}
-    elif name == "subscribe_service":
-        service = _clean_service_name(params.get("service_name") or params.get("service") or "")
-        amount = _money(params.get("amount"))
-        if not service or amount <= 0:
-            return None
-        clean["params"] = {"service_name": service, "amount": amount, "cycle": str(params.get("cycle") or "每月")}
-    elif name == "transfer":
-        recipient = str(params.get("recipient") or "").strip()[:40]
-        amount = _money(params.get("amount"))
-        if not recipient or amount <= 0:
-            return None
-        clean["params"] = {"recipient": recipient, "amount": amount, "remark": str(params.get("remark") or "用户发起转账")[:80]}
-    elif name == "manage_pocket":
-        operation = str(params.get("operation") or "deposit").lower()
-        if operation not in {"create", "deposit", "withdraw"}:
-            operation = "deposit"
-        pocket_name = str(params.get("name") or "专项资金").strip()[:30]
-        amount = _money(params.get("amount"))
-        if amount < 0:
-            return None
-        clean["params"] = {"operation": operation, "name": pocket_name, "amount": amount}
-    elif name == "card_control":
-        operation = str(params.get("operation") or "").lower()
-        if operation not in {"freeze", "unfreeze", "overseas_lock", "night_lock", "recurring_lock", "atm_lock", "adjust_limit"}:
-            return None
-        value = params.get("value")
-        clean["params"] = {"card_tail": str(params.get("card_tail") or "")[-4:], "operation": operation,
-                           "value": _money(value) if operation == "adjust_limit" else bool(value)}
-    elif name in {"subscribe_wealth", "redeem_wealth"}:
-        clean["params"] = {"product_name": str(params.get("product_name") or "").strip()[:80], "amount": _money(params.get("amount"))}
-    return clean
+    return policy.normalize_action(raw)
 
 
 def authorization_level(user_id: str, action: dict[str, Any]) -> tuple[str, float, float]:
-    name = action.get("action")
-    params = action.get("params", {})
-    connection = database.get_connection()
-    connection.row_factory = sqlite3.Row
-    try:
-        user = connection.execute("SELECT daily_transfer_used FROM users WHERE user_id=?", (user_id,)).fetchone()
-        prefs = _preferences(connection, user_id)
-    finally:
-        connection.close()
-    used = _money(user["daily_transfer_used"] if user else 0)
-    daily_limit = _money(prefs.get("transfer_threshold"), 1000)
-    remaining = max(0.0, daily_limit - used)
-    amount = _money(params.get("amount")) if name in {
-        "transfer", "subscribe_service", "manage_pocket", "subscribe_wealth", "redeem_wealth"
-    } else 0.0
-    if name == "card_control" and params.get("operation") == "adjust_limit":
-        amount = _money(params.get("value"))
-    if name in {"cancel_subscription"}:
-        return "L1", remaining, daily_limit
-    if name == "card_control" and (params.get("operation") in {"freeze", "overseas_lock", "night_lock", "recurring_lock", "atm_lock"} and params.get("value") is not False):
-        return "L1", remaining, daily_limit
-    if name == "transfer" and amount > remaining:
-        return "L3", remaining, daily_limit
-    return "L2", remaining, daily_limit
+    info = policy.classify(user_id, action)
+    used = _money((database.fetch_all(
+        "SELECT daily_transfer_used FROM users WHERE user_id=?", (user_id,)
+    ) or [{"daily_transfer_used": 0}])[0]["daily_transfer_used"])
+    effective = policy.effective_daily_limit(user_id)
+    return info["level"], max(0.0, effective - used), effective
 
 
 def _price_for(service: str, provided: float = 0.0) -> float:
@@ -455,7 +397,8 @@ def _audit_receipt(user_id: str, action: dict[str, Any], summary: str, amount: f
     }
 
 
-def execute_action(user_id: str, action: dict[str, Any], *, level: str, temporary_limit_raise: bool = False) -> dict[str, Any]:
+def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[str, Any]:
+    policy.ensure_schema()
     action = _normalize_action(action) or {}
     name = action.get("action")
     params = action.get("params", {})
@@ -527,14 +470,11 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str, temporar
             amount = _money(params["amount"])
             recipient = params["recipient"]
             used = _money(user["daily_transfer_used"])
-            limit = _money(prefs.get("transfer_threshold"), 1000)
+            limit = policy.effective_daily_limit_on_connection(connection, user_id)
             if amount > balance:
                 raise ValueError("活期可用余额不足")
-            if amount > max(0, limit - used) and not temporary_limit_raise:
+            if amount > max(0, limit - used):
                 raise ValueError("超过今日剩余转账额度")
-            if temporary_limit_raise:
-                new_limit = max(5000.0, amount + used)
-                connection.execute("UPDATE user_preferences SET transfer_threshold=? WHERE user_id=?", (new_limit, user_id))
             risky = any(word in recipient for word in ("安全账户", "公检法", "返利"))
             if risky:
                 raise ValueError("收款人命中反诈黑名单")
@@ -628,6 +568,17 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str, temporar
             balance_after = balance
             data = {"card_id": card["card_id"], "card_no": card["card_no"], "operation": operation, "value": value}
 
+        elif name == "limit_change":
+            value = _money(params.get("value"))
+            if value <= 0:
+                raise ValueError("限额必须大于零")
+            connection.execute("UPDATE user_preferences SET transfer_threshold=? WHERE user_id=?", (value, user_id))
+            connection.execute("DELETE FROM limit_overrides WHERE user_id=?", (user_id,))
+            balance_after = balance
+            amount = value
+            summary = f"单日风控限额已调整为 ¥{value:.2f}。"
+            data = {"previous_limit": _money(prefs.get("transfer_threshold")), "new_limit": value}
+
         elif name in {"subscribe_wealth", "redeem_wealth"}:
             product_name = params.get("product_name", "")
             product = connection.execute(
@@ -689,7 +640,7 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str, temporar
     finally:
         connection.close()
 
-    audit = security_gateway.log_event(user_id, "AI_BANK_ACTION_EXECUTED", name, level, {
+    audit = policy.audit_event(user_id, "AI_BANK_ACTION_EXECUTED", name, level, {
         "action": action, "summary": summary, "amount": amount,
     })
     receipt = _audit_receipt(user_id, action, summary, amount, balance_after, level, audit)

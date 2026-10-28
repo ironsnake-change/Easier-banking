@@ -180,7 +180,7 @@ class BankingAgent:
                 pending = {"pending_action_id": node.pending_action_id, "dag_id": task.dag_id,
                            "step_id": node.step_id, "tool_name": node.tool_name, "risk_level": node.risk_level,
                            "risk_reason": gate.get("risk_reason", "需要授权"), "require_mfa": node.risk_level == "RED",
-                           "arguments": node.arguments}
+                           "arguments": node.arguments, "demo_hint": gate.get("demo_hint")}
                 text = "；".join(filter(None, summaries + [gate.get("confirmation_prompt", "请确认本次操作。")]))
                 return self._response(task, task.overall_status, text, elder_mode, pending)
             node.status = "FAILED"
@@ -233,8 +233,8 @@ class BankingAgent:
         return self._continue(task, elder_mode)
 
     def resume_dag_after_auth(self, dag_id: str, pending_action_id: str, action: str = "approve",
-                              sms_code: str | None = None, face_verified: bool = False,
-                              user_id: str = "U001", elder_mode: bool = True) -> dict:
+                              sms_code: str | None = None, user_id: str = "U001",
+                              elder_mode: bool = True) -> dict:
         task = _restore(dag_id)
         if not task or task.user_id not in {user_id, "U1001" if user_id == "U001" else user_id}:
             raise ValueError("DAG 不存在或不属于当前用户")
@@ -247,7 +247,7 @@ class BankingAgent:
             task.overall_status = "ABORTED"
             _persist(task)
             return self._response(task, "COMPLETED", rejected.get("summary", "已取消本次操作。"), elder_mode)
-        outcome = self.gateway.approve_pending_action(pending_action_id, "CONFIRM", sms_code, face_verified, user_id)
+        outcome = self.gateway.approve_pending_action(pending_action_id, "CONFIRM", sms_code, user_id=user_id)
         if outcome.get("status") != "success":
             return self._response(task, "PAUSED_FOR_MFA" if node.risk_level == "RED" else "PAUSED_FOR_CONFIRM",
                                   outcome.get("summary", "验证尚未通过，请重试。"), elder_mode,

@@ -24,6 +24,7 @@
   var activeSpeechMessage = null;
   var savedVoiceGender = "";
   try { savedVoiceGender = localStorage.getItem(VOICE_GENDER_KEY) || ""; } catch (error) {}
+  var proposalSecrets = {};
   var chartPulsePhase = 0;
   var chartRaf = 0;
   var chartRafLast = 0;
@@ -356,6 +357,7 @@
         { contact_id: "CONTACT_Z_01", user_id: userId, name: "许小宝", alias: "大孙子,孙子,小宝", bank_card: "622202******2202", usual_amount: 500, is_risky: 0 }
       ] : [],
       scheduled_tasks: [],
+      limit_overrides: [],
       chat_messages: [],
       security_status: {
         is_locked: false, consecutive_failures: 0, cumulative_risk_score: isElder ? 18 : 12,
@@ -388,6 +390,7 @@
     data.subscriptions = ensureArray(data.subscriptions);
     data.contacts = ensureArray(data.contacts);
     data.scheduled_tasks = ensureArray(data.scheduled_tasks);
+    data.limit_overrides = ensureArray(data.limit_overrides);
     data.chat_messages = ensureArray(data.chat_messages);
     data.security_status = data.security_status || {};
     data.engine_status = data.engine_status || {};
@@ -704,8 +707,11 @@
         var payload = {};
         try { payload = text ? JSON.parse(text) : {}; } catch (error) { payload = { detail: text }; }
         if (!response.ok) {
-          var failure = new Error(payload.detail || payload.message || "请求未能完成");
+          var details = payload.detail;
+          var message = details && typeof details === "object" ? details.message : details;
+          var failure = new Error(message || payload.message || "请求未能完成");
           failure.status = response.status;
+          failure.payload = details && typeof details === "object" ? details : payload;
           throw failure;
         }
         return payload;
@@ -816,6 +822,7 @@
       transfer: "账户转账",
       manage_pocket: "专项资金口袋",
       card_control: "银行卡风控变更",
+      limit_change: "单日风控限额调整",
       subscribe_wealth: "理财产品申购",
       redeem_wealth: "理财产品赎回"
     }[action] || "账户操作";
@@ -911,7 +918,7 @@
   function normalizeLocalAction(action) {
     if (!action || typeof action !== "object") return null;
     var name = String(action.action || "");
-    if (["cancel_subscription", "subscribe_service", "transfer", "manage_pocket", "card_control", "subscribe_wealth", "redeem_wealth"].indexOf(name) < 0) return null;
+    if (["cancel_subscription", "subscribe_service", "transfer", "manage_pocket", "card_control", "limit_change", "subscribe_wealth", "redeem_wealth"].indexOf(name) < 0) return null;
     var params = action.params && typeof action.params === "object" ? action.params : {};
     var copy = { action: name, params: Object.assign({}, params) };
     if (name === "cancel_subscription") copy.params.service_name = cleanService(params.service_name || params.service || "");
@@ -919,41 +926,216 @@
     if (name === "transfer") { copy.params.recipient = String(params.recipient || "").trim(); copy.params.amount = Number(params.amount || 0); }
     if (name === "manage_pocket") { copy.params.name = String(params.name || "专项资金"); copy.params.amount = Number(params.amount || 0); copy.params.operation = params.operation || "deposit"; }
     if (name === "card_control") { copy.params.card_tail = String(params.card_tail || "").slice(-4); copy.params.operation = String(params.operation || ""); }
+    if (name === "limit_change") copy.params.value = Number(params.value || 0);
     if (name === "subscribe_wealth" || name === "redeem_wealth") { copy.params.product_name = String(params.product_name || ""); copy.params.amount = Number(params.amount || 0); }
     return copy;
   }
 
+  function activeLocalOverrides() {
+    var now = Date.now();
+    var overrides = ensureArray(state.data && state.data.limit_overrides);
+    return overrides.filter(function (item) { return item && new Date(item.expires_at).getTime() > now; });
+  }
+
+  function localEffectiveLimit() {
+    var base = Number(prefsData().transfer_threshold || 1000);
+    var extra = activeLocalOverrides().reduce(function (sum, item) { return sum + Number(item.amount || 0); }, 0);
+    return Number((base + extra).toFixed(2));
+  }
+
+  function localCard(action) {
+    var tail = String((action.params || {}).card_tail || "");
+    return ensureArray(state.data && state.data.cards).find(function (card) {
+      return !tail || String(card.card_no || "").indexOf(tail) >= 0;
+    }) || (state.data && state.data.cards && state.data.cards[0]) || null;
+  }
+
   function localActionLevel(action) {
-    var data = state.data, prefs = prefsData(), profile = profileData();
-    var limit = Number(prefs.transfer_threshold || profile.daily_transfer_limit || 1000);
+    var prefs = prefsData(), profile = profileData();
+    var limit = localEffectiveLimit();
     var remaining = Math.max(0, limit - Number(profile.daily_transfer_used || 0));
-    if (action.action === "cancel_subscription") return { level: "L1", remaining: remaining, dailyLimit: limit };
-    if (action.action === "card_control") {
-      var op = action.params.operation, value = action.params.value;
-      if (["freeze", "overseas_lock", "night_lock", "recurring_lock", "atm_lock"].indexOf(op) >= 0 && value !== false) {
-        return { level: "L1", remaining: remaining, dailyLimit: limit };
+    var info = { level: "L2", remaining: remaining, dailyLimit: limit, requires: ["confirmation"], reasons: ["该操作涉及账户状态或资金变更"] };
+    if (action.action === "transfer") {
+      var recipient = String(action.params.recipient || "");
+      var registered = ensureArray(state.data.contacts).some(function (contact) {
+        return recipient === contact.name || String(contact.alias || "").split(",").indexOf(recipient) >= 0;
+      });
+      var reasons = [];
+      if (Number(action.params.amount || 0) > remaining) reasons.push("转账金额超过今日剩余额度");
+      if (!registered) reasons.push("收款人尚未登记，属于首次转账");
+      if (reasons.length) return { level: "L3", remaining: remaining, dailyLimit: limit, requires: ["confirmation", "otp"], reasons: reasons };
+      info.reasons = ["转账金额未超过今日剩余额度且收款人已登记"];
+    } else if (action.action === "card_control") {
+      var op = action.params.operation, value = action.params.value, card = localCard(action);
+      if (op === "unfreeze") return { level: "L3", remaining: remaining, dailyLimit: limit, requires: ["confirmation", "otp"], reasons: ["解冻银行卡会恢复支付权限"] };
+      if (["overseas_lock", "night_lock", "recurring_lock", "recurring_debit_lock", "atm_lock", "atm_magnet_lock"].indexOf(op) >= 0 && value === false) {
+        return { level: "L3", remaining: remaining, dailyLimit: limit, requires: ["confirmation", "otp"], reasons: ["关闭银行卡安全锁会扩大交易权限"] };
       }
+      if (op === "adjust_limit" && Number(value) > Number(card && card.daily_limit || 0)) {
+        return { level: "L3", remaining: remaining, dailyLimit: limit, requires: ["confirmation", "otp"], reasons: ["银行卡限额将被调高"] };
+      }
+      if (op === "freeze" || (["overseas_lock", "night_lock", "recurring_lock", "recurring_debit_lock", "atm_lock", "atm_magnet_lock"].indexOf(op) >= 0 && value !== false)) {
+        return { level: "L1", remaining: remaining, dailyLimit: limit, requires: ["confirmation"], reasons: ["保护性安全操作，一键确认后生效"] };
+      }
+    } else if (action.action === "limit_change") {
+      if (Number(action.params.value || 0) > Number(prefsData().transfer_threshold || 1000)) {
+        return { level: "L3", remaining: remaining, dailyLimit: limit, requires: ["confirmation", "otp"], reasons: ["单日风控限额即将被调高"] };
+      }
+      return { level: "L2", remaining: remaining, dailyLimit: limit, requires: ["confirmation"], reasons: ["单日风控限额调整"] };
     }
-    if (action.action === "transfer" && Number(action.params.amount || 0) > remaining) return { level: "L3", remaining: remaining, dailyLimit: limit };
-    return { level: "L2", remaining: remaining, dailyLimit: limit };
+    return info;
   }
 
   function makeLocalAuthorization(action, levelInfo) {
     var params = action.params || {};
-    var amount = Number(params.amount || (action.action === "card_control" && params.operation === "adjust_limit" ? params.value : 0) || 0);
-    return {
-      authorization_id: "AUTH-LOCAL-" + Date.now().toString(36).toUpperCase(),
+    var proposalId = "PROP-LOCAL-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+    var token = randomHex(40);
+    var otp = levelInfo.level === "L3" ? String(Math.floor(100000 + Math.random() * 900000)) : "";
+    var expiresAt = new Date(Date.now() + 120000).toISOString();
+    var amount = Number(params.amount || ((action.action === "card_control" && params.operation === "adjust_limit") || action.action === "limit_change" ? params.value : 0) || 0);
+    var card = localCard(action);
+    var authorization = {
+      proposal_id: proposalId,
       level: levelInfo.level,
+      requires: levelInfo.requires,
+      reasons: levelInfo.reasons,
       status: "PENDING",
       action: action,
       business_type: actionLabel(action.action),
       target: params.recipient || params.service_name || params.name || params.card_tail || "当前账户",
       amount: amount,
-      card_tail: params.card_tail || profileData().display_card_tail,
+      card_tail: params.card_tail || cardTail(card && card.card_no) || profileData().display_card_tail,
       remaining_limit: levelInfo.remaining,
       daily_limit: levelInfo.dailyLimit,
-      raise_to: levelInfo.level === "L3" ? Math.max(5000, amount + levelInfo.dailyLimit - levelInfo.remaining) : null
+      otp_required: levelInfo.level === "L3",
+      expires_at: expiresAt,
+      override_to: levelInfo.level === "L3" && action.action === "transfer"
+        ? Math.max(5000, amount + Number(profileData().daily_transfer_used || 0))
+        : null
     };
+    proposalSecrets[proposalId] = {
+      token: token,
+      otp: otp,
+      expiresAt: Date.parse(expiresAt),
+      attempts: 0,
+      local: true
+    };
+    return authorization;
+  }
+
+  function rememberProposal(authorization) {
+    if (!authorization || !authorization.proposal_id) return;
+    var token = authorization.confirm_token || (proposalSecrets[authorization.proposal_id] || {}).token;
+    if (!token) return;
+    proposalSecrets[authorization.proposal_id] = {
+      token: token,
+      otp: authorization.demo_hint && authorization.demo_hint.otp ? String(authorization.demo_hint.otp) : (proposalSecrets[authorization.proposal_id] || {}).otp || "",
+      demoHint: authorization.demo_hint || (proposalSecrets[authorization.proposal_id] || {}).demoHint || null,
+      expiresAt: Date.parse(authorization.expires_at || "") || (proposalSecrets[authorization.proposal_id] || {}).expiresAt || 0,
+      attempts: (proposalSecrets[authorization.proposal_id] || {}).attempts || 0,
+      local: authorization.local === true || location.protocol === "file:" || state.source === "local" && String(state.token).indexOf("local-session-") === 0
+    };
+  }
+
+  function proposalSecret(authorization) {
+    if (!authorization || !authorization.proposal_id) return null;
+    return proposalSecrets[authorization.proposal_id] || null;
+  }
+
+  function discardProposal(authorization) {
+    if (authorization && authorization.proposal_id) delete proposalSecrets[authorization.proposal_id];
+  }
+
+  async function proposeAction(action, messageId) {
+    action = normalizeLocalAction(action);
+    if (!action) throw new Error("该业务动作不在许可范围内。");
+    if (state.source === "cloud" && location.protocol !== "file:" && state.token && state.token.indexOf("local-session-") !== 0) {
+      var response = await requestJSON("/api/assistant/propose", {
+        method: "POST",
+        timeout: 10000,
+        body: JSON.stringify({ action: action, message_id: messageId == null ? null : Number(messageId) })
+      });
+      rememberProposal(response.authorization || response.card);
+      if (response.live_state) {
+        state.data = normalizeState(response.live_state);
+        renderAll();
+      }
+      return response;
+    }
+    var levelInfo = localActionLevel(action);
+    var authorization = makeLocalAuthorization(action, levelInfo);
+    var secret = proposalSecret(authorization) || {};
+    return {
+      proposal_id: authorization.proposal_id,
+      level: authorization.level,
+      requires: authorization.requires,
+      reasons: authorization.reasons,
+      expires_at: authorization.expires_at,
+      authorization: authorization,
+      demo_hint: secret.otp ? { otp: secret.otp } : null,
+      local: true
+    };
+  }
+
+  async function confirmProposalAuthorization(authorization, otp) {
+    var secret = proposalSecret(authorization);
+    if (!secret || !secret.token) throw new Error("确认密钥仅在发起授权的当前会话内有效，请重新发起业务。");
+    if (secret.expiresAt && Date.now() > secret.expiresAt) {
+      discardProposal(authorization);
+      throw new Error("授权提案已过期，请重新发起。");
+    }
+    if (authorization.otp_required || authorization.level === "L3") {
+      if (!otp) {
+        secret.attempts = Number(secret.attempts || 0) + 1;
+        if (secret.attempts >= 3) discardProposal(authorization);
+        throw new Error("请输入一次性验证码。剩余 " + Math.max(0, 3 - secret.attempts) + " 次尝试。");
+      }
+      if (secret.local && secret.otp && String(otp) !== String(secret.otp)) {
+        secret.attempts = Number(secret.attempts || 0) + 1;
+        if (secret.attempts >= 3) discardProposal(authorization);
+        throw new Error("验证码错误。剩余 " + Math.max(0, 3 - secret.attempts) + " 次尝试。");
+      }
+    }
+    if (!secret.local) {
+      var response = await requestJSON("/api/assistant/confirm", {
+        method: "POST",
+        timeout: 12000,
+        body: JSON.stringify({
+          proposal_id: authorization.proposal_id,
+          confirm_token: secret.token,
+          otp: otp || null,
+          cancel: false
+        })
+      });
+      discardProposal(authorization);
+      if (response.live_state) state.data = normalizeState(response.live_state);
+      renderAll();
+      return response;
+    }
+    var executed = await executeLocalAction(authorization.action, authorization.level);
+    discardProposal(authorization);
+    return { status: "EXECUTED", summary: executed.summary, receiptData: executed.receiptData, local: true };
+  }
+
+  async function cancelProposalAuthorization(authorization) {
+    var secret = proposalSecret(authorization);
+    if (!secret || !secret.token) return { status: "CANCELLED" };
+    var wasLocal = secret.local;
+    if (!secret.local) {
+      var response = await requestJSON("/api/assistant/confirm", {
+        method: "POST",
+        timeout: 8000,
+        body: JSON.stringify({
+          proposal_id: authorization.proposal_id,
+          confirm_token: secret.token,
+          otp: null,
+          cancel: true
+        })
+      });
+      if (response.live_state) state.data = normalizeState(response.live_state);
+    }
+    discardProposal(authorization);
+    return { status: "CANCELLED", local: wasLocal };
   }
 
   function directCloudRequest(message, maxTokens) {
@@ -1254,7 +1436,6 @@
             tts_rate: Number(prefs.tts_rate || 1),
             sound_enabled: !!prefs.sound_enabled,
             auto_read: !!prefs.auto_read,
-            transfer_threshold: Number(prefs.transfer_threshold || 1000),
             engine_mode: prefs.engine_mode || "auto"
           })
         });
@@ -1290,29 +1471,35 @@
   function renderAuthorizationCard(message, index) {
     var authorization = message && message.receipt && message.receipt.authorization;
     if (!authorization || typeof authorization !== "object") return "";
-    if (authorization.level === "L1" || authorization.level === "L1") {
-      if (authorization.status === "AUTHORIZED") return '<div class="business-done">✓ 业务已即时办结 · 审计哈希已生成</div>';
-      if (authorization.status === "FAILED") return '<div class="business-done failed">本次保护性操作未执行：' + esc(authorization.error || "风控拦截") + '</div>';
-    }
     var action = authorization.action || {};
     var params = action.params || {};
     var amount = Number(authorization.amount || params.amount || (params.operation === "adjust_limit" ? params.value : 0) || 0);
     var target = authorization.target || params.recipient || params.service_name || params.name || params.card_tail || "当前账户";
     var levelClass = authorization.level === "L3" ? " l3" : "";
     var statusClass = authorization.status === "AUTHORIZED" ? " done" : authorization.status === "CANCELLED" ? " cancelled" : "";
-    var html = '<section class="in-chat-auth' + levelClass + statusClass + '" data-auth-id="' + esc(authorization.authorization_id || "") + '">' +
-      '<div class="auth-card-head"><b>' + (authorization.level === "L3" ? "风控超限拦截卡" : "交易安全授权卡") + '</b><span>' + esc(authorization.level === "L3" ? "L3 高风险" : "L2 受控操作") + '</span></div>' +
+    var secret = proposalSecret(authorization);
+    var requiresOtp = authorization.otp_required || authorization.level === "L3";
+    var reasons = ensureArray(authorization.reasons);
+    var html = '<section class="in-chat-auth' + levelClass + statusClass + '" data-auth-id="' + esc(authorization.proposal_id || "") + '">' +
+      '<div class="auth-card-head"><b>' + (authorization.level === "L3" ? "风险升级授权卡" : "交易安全授权卡") + '</b><span>' + esc(authorization.level === "L1" ? "L1 保护性操作" : authorization.level === "L3" ? "L3 强验证" : "L2 受控操作") + '</span></div>' +
       '<div class="auth-card-amount">' + money(amount) + '</div>' +
-      '<div class="auth-card-grid"><div><small>业务类型</small><b>' + esc(authorization.business_type || actionLabel(action.action)) + '</b></div><div><small>交易对手 / 目标</small><b>' + esc(target) + '</b></div><div><small>付款卡</small><b>尾号 ' + esc(authorization.card_tail || profileData().display_card_tail) + '</b></div><div><small>风险评级</small><b>' + esc(authorization.level === "L3" ? "L3 超出今日剩余额度" : "L2 受控操作") + '</b></div></div>';
-    if (authorization.level === "L3") {
-      html += '<div class="auth-card-result">今日剩余额度 ' + money(authorization.remaining_limit) + '，本次需要临时提额至 ' + money(authorization.raise_to || 5000) + '。</div>';
-    }
+      '<div class="auth-card-grid"><div><small>业务类型</small><b>' + esc(authorization.business_type || actionLabel(action.action)) + '</b></div><div><small>交易对手 / 目标</small><b>' + esc(target) + '</b></div><div><small>付款卡</small><b>尾号 ' + esc(authorization.card_tail || profileData().display_card_tail) + '</b></div><div><small>今日剩余额度</small><b>' + money(authorization.remaining_limit) + '</b></div></div>';
+    if (reasons.length) html += '<div class="proposal-reasons">' + reasons.map(function (reason) { return '<span>' + esc(reason) + '</span>'; }).join("") + '</div>';
+    if (authorization.override_to) html += '<div class="auth-card-result">确认通过后将创建临时额度，仅把本次转账所需额度提升至 ' + money(authorization.override_to) + '，到期自动恢复。</div>';
     if (authorization.status === "PENDING") {
-      html += '<div class="auth-card-actions"><button class="auth-approve" type="button" data-auth-approve="' + index + '" data-temp-raise="' + (authorization.level === "L3" ? "1" : "0") + '">' + (authorization.level === "L3" ? "⚡ 临时提额至 " + money(authorization.raise_to || 5000) + " 并继续授权" : "✓ 确认授权并执行") + '</button><button class="auth-cancel" type="button" data-auth-cancel="' + index + '">✕ 取消</button></div>';
+      if (requiresOtp) {
+        html += '<label class="otp-field"><span>一次性验证码</span><input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" data-otp-input="' + index + '" placeholder="6 位验证码">' +
+          (secret && secret.demoHint && secret.demoHint.otp ? '<small>演示验证码：' + esc(secret.demoHint.otp) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>';
+      }
+      html += '<div class="auth-card-actions"><button class="auth-approve" type="button" data-auth-approve="' + index + '"' + (!secret ? " disabled" : "") + '>' + (requiresOtp ? "验证并执行" : "确认授权并执行") + '</button><button class="auth-cancel" type="button" data-auth-cancel="' + index + '"' + (!secret ? " disabled" : "") + '>✕ 取消</button></div>';
+      if (!secret) html += '<div class="auth-card-result" style="color:var(--amber)">确认密钥只在发起授权后的 120 秒内有效，请重新发起此操作。</div>';
+      if (authorization.last_error) html += '<div class="auth-card-result" style="color:var(--red)">' + esc(authorization.last_error) + '</div>';
     } else if (authorization.status === "AUTHORIZED") {
-      html += '<div class="auth-card-result">✓ 已授权执行' + (authorization.elapsed_ms != null ? " (耗时 " + (Number(authorization.elapsed_ms) / 1000).toFixed(2) + "s)" : "") + ' · 账本与审计链已同步</div>';
+      html += '<div class="auth-card-result">✓ 已授权执行 · 账本与审计链已同步</div>';
     } else if (authorization.status === "CANCELLED") {
       html += '<div class="auth-card-result">已取消，本次未发生资金变动。</div>';
+    } else if (authorization.status === "EXPIRED") {
+      html += '<div class="auth-card-result">确认窗口已过期，请重新发起业务。</div>';
     } else if (authorization.status === "FAILED") {
       html += '<div class="auth-card-result" style="color:var(--red)">执行失败：' + esc(authorization.error || "风控拦截") + '</div>';
     }
@@ -1338,7 +1525,7 @@
       pills.push(["有效代扣", activeSubs.length + " 项 · " + money(monthly) + "/月"]);
     }
     if (/额度|转账|余额/.test(text)) {
-      var remaining = Math.max(0, Number(prefs.transfer_threshold || profile.daily_transfer_limit || 1000) - Number(profile.daily_transfer_used || 0));
+      var remaining = Math.max(0, (state.source === "local" ? localEffectiveLimit() : Number(profile.daily_transfer_limit || prefs.transfer_threshold || 1000)) - Number(profile.daily_transfer_used || 0));
       pills.push(["剩余额度", money(remaining)]);
     }
     return pills.slice(0, 3).map(function (item) {
@@ -1398,7 +1585,7 @@
       };
     });
     all("[data-auth-approve]", target).forEach(function (button) {
-      button.onclick = function () { approveAuthorization(Number(button.getAttribute("data-auth-approve")), button.getAttribute("data-temp-raise") === "1"); };
+      button.onclick = function () { approveAuthorization(Number(button.getAttribute("data-auth-approve"))); };
     });
     all("[data-auth-cancel]", target).forEach(function (button) {
       button.onclick = function () { cancelAuthorization(Number(button.getAttribute("data-auth-cancel"))); };
@@ -1458,7 +1645,10 @@
     var available = Number(profile.available_balance || 0);
     var locked = Number(profile.locked_balance || 0);
     var used = Number(profile.daily_transfer_used || 0);
-    var limit = Number(profile.daily_transfer_limit || prefsData().transfer_threshold || 1000);
+    var limit = state.source === "local"
+      ? localEffectiveLimit()
+      : Number(profile.daily_transfer_limit || prefsData().transfer_threshold || 1000);
+    profile.daily_transfer_limit = limit;
     var remaining = Math.max(0, limit - used);
     safeText("availableBalance", money(available));
     safeText("lockedBalance", money(locked));
@@ -1791,85 +1981,98 @@
     });
   }
 
+  function proposalModalBody(proposal, action) {
+    var authorization = proposal.authorization || proposal.card || {};
+    var requiresOtp = proposal.requires_otp || authorization.otp_required || authorization.level === "L3";
+    var reasons = ensureArray(proposal.reasons || authorization.reasons);
+    var amount = Number(
+      authorization.amount != null ? authorization.amount :
+      action.params.amount != null ? action.params.amount :
+      typeof action.params.value === "number" ? action.params.value : 0
+    );
+    var hint = proposal.demo_hint && proposal.demo_hint.otp ? proposal.demo_hint.otp : "";
+    return '<div class="confirm-summary"><span class="eyebrow">' + esc(authorization.level || proposal.level) + ' SECURE PROPOSAL</span><strong>' + money(amount) + '</strong><small>' +
+      esc(actionLabel(action.action)) + ' · ' + esc(authorization.target || action.params.recipient || action.params.service_name || action.params.name || action.params.card_tail || "当前账户") +
+      '<br>授权有效期至 ' + esc(String(proposal.expires_at || authorization.expires_at || "").replace("T", " ").slice(0, 19)) + '</small></div>' +
+      '<div class="proposal-reasons">' + reasons.map(function (reason) { return '<span>' + esc(reason) + '</span>'; }).join("") + '</div>' +
+      (requiresOtp ? '<label class="otp-field"><span>一次性验证码</span><input id="modalOtp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码">' + (hint ? '<small>演示验证码：' + esc(hint) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>' : "") +
+      '<div id="proposalModalError" class="inline-error"></div>';
+  }
+
   async function runSensitiveAction(action, title, subtitle) {
+    if (action && action.action === "card_control" && action.params) {
+      if (action.params.operation === "recurring_debit_lock") action.params.operation = "recurring_lock";
+      if (action.params.operation === "atm_magnet_lock") action.params.operation = "atm_lock";
+    }
     action = normalizeLocalAction(action);
     if (!action) return;
-    var info = localActionLevel(action);
-    if (info.level !== "L1") {
-      var confirmed = await confirmAction(
-        title || "安全授权确认",
-        subtitle || "该操作会改变账户资金或敏感权限。",
-        '<div class="confirm-summary"><span class="eyebrow">' + esc(info.level === "L3" ? "L3 HIGH RISK" : "L2 CONTROLLED OPERATION") + '</span><strong>' + money(action.params.amount || action.params.value || 0) + '</strong><small>' + esc(actionLabel(action.action)) + ' · 尾号 ' + esc(action.params.card_tail || profileData().display_card_tail) + '</small></div>',
-        info.level === "L3" ? "临时提额并执行" : "确认授权并执行"
-      );
-      if (!confirmed) return;
-    }
     try {
-      var result = await executeAiAction(action, info.level, info.level === "L3");
-      toast(result.summary || "业务已提交，账本与审计链已同步。");
-      tone();
-      await animateSaga(false);
-      renderAll();
-      if (result.receiptData && action.action !== "card_control") setTimeout(function () { openReceipt(result.receiptData); }, 140);
+      var proposal = await proposeAction(action);
+      var authorization = proposal.authorization || proposal.card;
+      var requiresOtp = proposal.requires_otp || authorization.otp_required || authorization.level === "L3";
+      openModal({
+        kicker: "SERVER-ISSUED AUTHORIZATION",
+        title: title || "交易安全授权",
+        subtitle: subtitle || "账务变更只会在确认提案后执行。",
+        body: proposalModalBody(proposal, action),
+        actions: [
+          { label: "取消", onClick: function () { cancelProposalAuthorization(authorization).then(renderAll).catch(function () {}); } },
+          { label: requiresOtp ? "验证并执行" : "确认授权并执行", primary: true, keepOpen: true, onClick: async function () {
+            var otp = byId("modalOtp") ? byId("modalOtp").value.trim() : "";
+            try {
+              var result = await confirmProposalAuthorization(authorization, otp);
+              closeModal();
+              toast(result.summary || "业务已执行，账本与审计链已同步。");
+              tone();
+              await animateSaga(false);
+              renderAll();
+              if (result.receiptData && action.action !== "card_control") setTimeout(function () { openReceipt(result.receiptData); }, 120);
+            } catch (error) {
+              safeText("proposalModalError", friendlyError(error));
+              tone();
+            }
+          } }
+        ]
+      });
     } catch (error) {
       toast(friendlyError(error));
     }
   }
 
-  async function executeAiAction(action, level, temporaryLimitRaise) {
-    if (state.source === "cloud" && location.protocol !== "file:" && state.token && state.token.indexOf("local-session-") !== 0) {
-      try {
-        var response = await requestJSON("/api/assistant/action", {
-          method: "POST",
-          timeout: 12000,
-          body: JSON.stringify({ action: action, confirmed: true, temporary_limit_raise: !!temporaryLimitRaise })
-        });
-        if (response.live_state) state.data = normalizeState(response.live_state);
-        renderAll();
-        return { summary: response.summary, receiptData: response.receiptData };
-      } catch (error) {
-        if (!isTransport(error)) throw error;
-        state.source = "local";
-        toast("云端处理暂未返回，已由本地安全账本继续执行。");
-      }
-    }
-    var result = await executeLocalAction(action, level, !!temporaryLimitRaise);
-    renderAll();
-    return result;
-  }
-
-  async function approveAuthorization(index, temporaryLimitRaise) {
+  async function approveAuthorization(index) {
     var message = renderedMessages[index];
     var authorization = message && message.receipt && message.receipt.authorization;
     if (!authorization || authorization.status !== "PENDING") return;
-    var started = performance.now();
+    var requiresOtp = authorization.otp_required || authorization.level === "L3";
+    var otpInput = document.querySelector('[data-otp-input="' + index + '"]');
+    var otp = otpInput ? otpInput.value.trim() : "";
+    if (requiresOtp && !otp) {
+      authorization.last_error = "请输入一次性验证码后再执行。";
+      renderChat();
+      return;
+    }
     try {
-      if (state.source === "cloud" && typeof message.message_id === "number" && state.token.indexOf("local-session-") !== 0) {
-        var response = await requestJSON("/api/assistant/execute", {
-          method: "POST",
-          timeout: 12000,
-          body: JSON.stringify({ message_id: message.message_id, temporary_limit_raise: !!temporaryLimitRaise, cancel: false })
-        });
-        if (response.live_state) state.data = normalizeState(response.live_state);
-        toast(response.summary || "授权完成，账本与审计链已同步。");
-        if (response.receiptData) setTimeout(function () { openReceipt(response.receiptData); }, 120);
-      } else {
-        var executed = await executeLocalAction(authorization.action, authorization.level, !!temporaryLimitRaise);
+      var result = await confirmProposalAuthorization(authorization, otp);
+      if (result.local) {
         authorization.status = "AUTHORIZED";
         authorization.executed_at = isoNow();
-        authorization.elapsed_ms = Math.round(performance.now() - started);
-        message.receipt.receiptData = executed.receiptData;
+        authorization.last_error = "";
+        message.receipt.receiptData = result.receiptData;
         message.receipt.status = "COMPLETED";
-        message.receipt.ttsText = executed.summary + "，业务已办结。";
+        message.receipt.ttsText = result.summary + "，业务已办结。";
         saveCurrentLocal();
-        toast(executed.summary || "授权完成，账本已实时更新。");
+      }
+      toast(result.summary || "授权完成，账本与审计链已同步。");
+      if (result.receiptData && message.receipt && (!authorization.action || authorization.action.action !== "card_control")) {
+        setTimeout(function () { openReceipt(result.receiptData); }, 120);
       }
       await animateSaga(false);
       renderAll();
       tone();
     } catch (error) {
+      authorization.last_error = friendlyError(error);
       toast(friendlyError(error));
-      renderAll();
+      renderChat();
     }
   }
 
@@ -1878,14 +2081,8 @@
     var authorization = message && message.receipt && message.receipt.authorization;
     if (!authorization || authorization.status !== "PENDING") return;
     try {
-      if (state.source === "cloud" && typeof message.message_id === "number" && state.token.indexOf("local-session-") !== 0) {
-        var response = await requestJSON("/api/assistant/execute", {
-          method: "POST",
-          timeout: 8000,
-          body: JSON.stringify({ message_id: message.message_id, temporary_limit_raise: false, cancel: true })
-        });
-        if (response.live_state) state.data = normalizeState(response.live_state);
-      } else {
+      var result = await cancelProposalAuthorization(authorization);
+      if (result.local) {
         authorization.status = "CANCELLED";
         authorization.cancelled_at = isoNow();
         message.receipt.ttsText = "本次交易已取消，账户余额没有发生变化。";
@@ -2524,7 +2721,7 @@
     return matched ? prices[matched] : 18;
   }
 
-  async function executeLocalAction(action, level, temporaryLimitRaise) {
+  async function executeLocalAction(action, level) {
     var data = state.data, profile = profileData(), params = action.params || {};
     var amount = Number(params.amount || (params.operation === "adjust_limit" ? params.value : 0) || 0);
     var summary = "", receipt = null, resultData = {};
@@ -2578,13 +2775,23 @@
       resultData = { merchant: merchant, amount: amount, balance_after: profile.available_balance };
     } else if (action.action === "transfer") {
       amount = Number(params.amount || 0);
-      var limit = Number(prefsData().transfer_threshold || profile.daily_transfer_limit || 1000);
+      var limit = localEffectiveLimit();
       var remaining = Math.max(0, limit - Number(profile.daily_transfer_used || 0));
       if (amount <= 0 || amount > Number(profile.available_balance || 0)) throw new Error("转账金额无效或余额不足。");
-      if (amount > remaining && !temporaryLimitRaise) throw new Error("本次转账超过今日剩余额度。");
-      if (temporaryLimitRaise) {
-        state.data.preferences.transfer_threshold = Math.max(5000, amount + limit - remaining);
-        limit = state.data.preferences.transfer_threshold;
+      if (amount > remaining) {
+        if (level !== "L3") throw new Error("本次转账超过今日剩余额度。");
+        var target = Math.max(5000, Number((amount + Number(profile.daily_transfer_used || 0)).toFixed(2)));
+        var supplement = Math.max(0, Number((target - limit).toFixed(2)));
+        state.data.limit_overrides = ensureArray(state.data.limit_overrides);
+        state.data.limit_overrides.push({
+          override_id: "OVR-LOCAL-" + Date.now().toString(36).toUpperCase(),
+          user_id: profile.user_id,
+          amount: supplement,
+          expires_at: new Date(Date.now() + 900000).toISOString(),
+          created_at: new Date().toISOString()
+        });
+        limit = localEffectiveLimit();
+        remaining = Math.max(0, limit - Number(profile.daily_transfer_used || 0));
         profile.daily_transfer_limit = limit;
       }
       profile.available_balance = Number((profile.available_balance - amount).toFixed(2));
@@ -2639,6 +2846,17 @@
       }
       receipt = localReceipt(data, "银行卡风控变更", amount, "尾号 " + cardTail(card.card_no), level === "L1" ? "GREEN" : "YELLOW");
       resultData = { card_id: card.card_id, operation: params.operation, value: value };
+    } else if (action.action === "limit_change") {
+      var newLimit = Number(params.value || 0);
+      if (newLimit <= 0) throw new Error("限额必须大于零。");
+      var previousLimit = Number(prefsData().transfer_threshold || 1000);
+      state.data.preferences.transfer_threshold = newLimit;
+      state.data.limit_overrides = [];
+      profile.daily_transfer_limit = newLimit;
+      amount = newLimit;
+      summary = "单日风控限额已调整为 " + money(newLimit) + "。";
+      receipt = localReceipt(data, "单日风控限额调整", amount, "风控限额", level === "L3" ? "RED" : "YELLOW");
+      resultData = { previous_limit: previousLimit, new_limit: newLimit };
     } else if (action.action === "subscribe_wealth") {
       amount = Number(params.amount || 0);
       var holding = ensureArray(data.wealth_holdings).find(function (item) { return !params.product_name || String(item.product_name).indexOf(params.product_name) >= 0; });
@@ -2696,24 +2914,16 @@
     var action = queryOnly ? null : normalizeLocalAction(inferLocalAction(lower));
     if (action) {
       var info = localActionLevel(action);
-      if (info.level === "L1") {
-        var executed = await executeLocalAction(action, info.level, false);
-        var doneAuth = makeLocalAuthorization(action, info);
-        doneAuth.status = "AUTHORIZED";
-        doneAuth.executed_at = isoNow();
-        addLocalMessage("assistant", executed.summary + " ✓ 业务已即时办结 · 审计哈希已生成", { status: "COMPLETED", receiptData: executed.receiptData, authorization: doneAuth });
-      } else {
-        var pending = makeLocalAuthorization(action, info);
-        var params = action.params || {};
-        var prompt = action.action === "cancel_subscription"
-          ? "已定位到「" + params.service_name + "」自动续费协议。"
-          : action.action === "subscribe_service"
-            ? "已识别「" + params.service_name + "」付费订阅，月费 " + money(params.amount) + "。请完成 L2 授权后，系统才会扣款并创建协议。"
-            : action.action === "transfer"
-              ? (info.level === "L3" ? "本次转账 " + money(params.amount) + " 超过今日剩余额度 " + money(info.remaining) + "，需要临时提额并完成强验证。" : "已识别转账 " + money(params.amount) + " 至 " + params.recipient + "，确认前不会扣款。")
-              : "已识别" + actionLabel(action.action) + "指令，涉及金额 " + money(params.amount || params.value || 0) + "。请核对下方授权卡。";
-        addLocalMessage("assistant", prompt, { authorization: pending });
-      }
+      var pending = makeLocalAuthorization(action, info);
+      var params = action.params || {};
+      var prompt = action.action === "cancel_subscription"
+        ? "已定位到「" + params.service_name + "」自动续费协议，完成确认后才会解除授权。"
+        : action.action === "subscribe_service"
+          ? "已识别「" + params.service_name + "」付费订阅，月费 " + money(params.amount) + "。完成授权后才会扣款并创建协议。"
+          : action.action === "transfer"
+            ? (info.level === "L3" ? "本次转账 " + money(params.amount) + " 超过今日剩余额度 " + money(info.remaining) + "，确认并验证无误后才会临时提额执行。" : "已识别转账 " + money(params.amount) + " 至 " + params.recipient + "，确认前不会扣款。")
+            : "已识别" + actionLabel(action.action) + "指令，涉及金额 " + money(params.amount || params.value || 0) + "。请核对下方授权卡。";
+      addLocalMessage("assistant", prompt + "\n确认卡仅在当前会话内有效，账务尚未变更。", { authorization: pending });
     } else {
       var reply = localPreciseReply(lower);
       if (!reply && /养老金|收支|账单|流水|花了|消费/.test(lower)) {
@@ -2759,8 +2969,7 @@
           dag_id: pending.dag_id,
           pending_action_id: pending.pending_action_id,
           action: "approve",
-          sms_code: pending.risk_level === "RED" ? "246810" : null,
-          face_verified: pending.risk_level === "RED"
+          sms_code: pending.risk_level === "RED" ? (pending.demo_hint && pending.demo_hint.otp) || null : null
         })
       });
       if (result.live_state) state.data = normalizeState(result.live_state);
@@ -2793,7 +3002,7 @@
     }
     if (/余额|账户总览|可用资金/.test(text)) {
       return profile.name + "，当前活期可用余额为 " + money(profile.available_balance) + "，专项锁定资金为 " + money(profile.locked_balance) +
-        "。今日剩余转账额度为 " + money(Math.max(0, Number(prefsData().transfer_threshold || 1000) - Number(profile.daily_transfer_used || 0))) + "。";
+        "。今日剩余转账额度为 " + money(Math.max(0, localEffectiveLimit() - Number(profile.daily_transfer_used || 0))) + "。";
     }
     if (/异常|盗刷|可疑|境外/.test(text)) {
       var abnormal = ensureArray(data.bill_analytics && data.bill_analytics.abnormal_transactions);
@@ -2844,6 +3053,7 @@
             body: JSON.stringify({ message: text, elder_mode: !!profileData().elderly_mode })
           });
           typing = false;
+          if (response.authorization) rememberProposal(response.authorization);
           if (response.live_state) state.data = normalizeState(response.live_state);
           if (response.route_channel === "tencent_gateway") setCloudStatus("online", "tencent_gateway", response.latency_ms);
           else if (response.route_channel === "local_semantic") setCloudStatus("offline", "local_semantic", null);
@@ -2874,17 +3084,8 @@
       setCloudStatus("online", cloud.channel, cloud.latency);
       if (action) {
         var info = localActionLevel(action);
-        if (info.level === "L1") {
-          var executed = await executeLocalAction(action, info.level, false);
-          var authorization = makeLocalAuthorization(action, info);
-          authorization.status = "AUTHORIZED";
-          authorization.executed_at = isoNow();
-          visible = executed.summary + " ✓ 业务已即时办结 · 审计哈希已生成";
-          appendAssistantMessage(visible, { status: "COMPLETED", receiptData: executed.receiptData, authorization: authorization });
-        } else {
-          var pending = makeLocalAuthorization(action, info);
-          appendAssistantMessage(visible, { authorization: pending });
-        }
+        var pending = makeLocalAuthorization(action, info);
+        appendAssistantMessage(visible + "\n确认卡仅在当前会话内有效，账务尚未变更。", { authorization: pending });
       } else {
         appendAssistantMessage(visible, {});
       }
@@ -3020,15 +3221,22 @@
   async function savePreferences() {
     var rate = byId("ttsRate") ? Number(byId("ttsRate").value) : 1;
     var limit = byId("riskLimit") ? Number(byId("riskLimit").value) : 1000;
+    var previousLimit = Number(prefsData().transfer_threshold || 1000);
     await persistPreferences({
       elder_mode: document.body.classList.contains("elder") ? 1 : 0,
       tts_rate: rate,
       sound_enabled: byId("soundToggle") && byId("soundToggle").getAttribute("aria-checked") === "true",
       auto_read: byId("ttsToggle") && byId("ttsToggle").getAttribute("aria-checked") === "true",
       chart_type: chartType,
-      transfer_threshold: limit,
       engine_mode: engineState.mode
     }, false);
+    if (limit !== previousLimit) {
+      await runSensitiveAction(
+        { action: "limit_change", params: { value: limit } },
+        "调整单日风控限额",
+        "调高基础限额属于 L3 风险操作，需要确认并验证；调低限额仅需确认。"
+      );
+    }
     safeText("prefsSaveStatus", "已保存 · " + new Date().toLocaleTimeString("zh-CN", { hour12: false }));
     tone();
   }

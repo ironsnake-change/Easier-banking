@@ -515,12 +515,18 @@ def reset_workspace_data(db_path: str | Path | None = None) -> Path:
     path = database.reset_demo_db(db_path)
     connection = database.get_connection(path)
     try:
-        for table in ("app_sessions", "chat_messages", "pockets", "user_preferences", "auth_accounts"):
+        for table in (
+            "action_proposals", "limit_overrides", "audit_outbox",
+            "app_sessions", "chat_messages", "pockets", "user_preferences", "auth_accounts",
+        ):
             connection.execute(f"DROP TABLE IF EXISTS {table}")
         connection.commit()
     finally:
         connection.close()
-    return ensure_workspace_schema(path)
+    restored = ensure_workspace_schema(path)
+    from core import policy
+    policy.ensure_schema()
+    return restored
 
 
 __all__ = [

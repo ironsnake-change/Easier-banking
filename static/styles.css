@@ -568,6 +568,12 @@ svg { display: block; }
 .auth-card-grid b { display: block; margin-top: 2px; font-size: 8px; }
 .auth-card-actions { display: flex; gap: 6px; margin-top: 11px; }
 .auth-card-actions button { flex: 1; min-height: 32px; padding: 6px 8px; border-radius: 8px; font-size: 8px; font-weight: 700; }
+.auth-card-actions button:disabled { opacity: .42; cursor: not-allowed; }
+.proposal-reasons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.proposal-reasons span { padding: 3px 6px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 7px; }
+.otp-field { display: grid; gap: 5px; margin-top: 9px; color: var(--muted); font-size: 7px; }
+.otp-field input { height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: 11px/1 "Cascadia Code", Consolas, monospace; letter-spacing: .16em; }
+.otp-field small { color: var(--amber); font-size: 7px; }
 .auth-approve { background: var(--button-bg); color: var(--button-ink); }
 .auth-cancel { border: 1px solid var(--line); background: transparent; color: var(--muted); }
 .auth-card-result { margin-top: 8px; color: var(--green); font-size: 8px; line-height: 1.55; }
