@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090a0d">
+  <title>Easier-banking · Private Financial Intelligence</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23101114'/%3E%3Cpath d='M7 20l9-11.5L25 20m-14 3l5-6.4 5 6.4' fill='none' stroke='%23f4f4f5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script>
+    (function () {
+      var staticBase = location.protocol === "file:" ? "./" : "/static/";
+      var stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet";
+      stylesheet.href = staticBase + "styles.css";
+      document.head.appendChild(stylesheet);
+    })();
+  </script>
+</head>
+<body data-theme="dark">
+  <section id="authView" class="auth-shell" aria-labelledby="authBrand">
+    <div class="auth-panel">
+      <aside class="auth-brand">
+        <div>
+          <div class="brand-kicker">EASIER-BANKING · PRIVATE WEALTH</div>
+          <div class="auth-brand-lockup"><span class="brand-mark brand-mark-large" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 19.5 16 8l9 11.5M11 22.5l5-6.4 5 6.4"/></svg></span><h1 id="authBrand">Easier-banking</h1></div>
+          <div class="brand-subtitle">PERSONAL FINANCIAL INTELLIGENCE</div>
+          <p class="auth-manifesto">让每一笔资产流转都清晰、克制、可追溯。融合实时智能风控与全天候财富管家，为您与家人的每一次金融决策提供银行级安全护航。</p>
+        </div>
+        <div class="auth-values"><span>✦ 全天候智能财务管家与实时流式风控</span><span>✦ 专项资金口袋与多维资产调拨保障</span><span>✦ SHA-256 交易级凭证与全龄无障碍关怀</span></div>
+      </aside>
+      <main class="auth-card">
+        <div class="auth-segmented" role="tablist" aria-label="账户入口">
+          <button id="loginTab" class="active" type="button" role="tab" aria-selected="true">登录</button>
+          <button id="registerTab" type="button" role="tab" aria-selected="false">申请开户</button>
+        </div>
+        <div id="loginPane" class="auth-pane">
+          <div class="auth-heading"><span class="eyebrow">PRIVATE NET BANKING</span><h2>登录个人网银</h2><p>请输入您的通行账号、客户号或绑定卡号尾号。</p></div>
+          <form id="loginForm" novalidate>
+            <label class="field"><span>账号 / 卡号尾号</span><input id="loginIdentity" autocomplete="username" placeholder="例如 linyan 或 8848"></label>
+            <label class="field"><span>登录密码</span><span class="input-shell"><input id="loginPassword" type="password" autocomplete="current-password" placeholder="请输入登录密码"><button class="password-toggle" type="button" data-password-toggle="loginPassword" aria-label="切换密码显示状态"></button></span></label>
+            <div id="loginError" class="inline-error" aria-live="polite"></div>
+            <button class="button button-primary button-wide" type="submit">安全登录</button>
+          </form>
+          <div class="passkey-heading"><span>已绑定通行密钥 · 快速登录</span><small>免密安全验证</small></div>
+          <div class="passkey-grid">
+            <button class="passkey-card" type="button" data-passkey="linyan"><span class="chip chip-silver" aria-hidden="true"></span><span class="passkey-copy"><b>林砚</b><small>私人银行卡 · 尾号 8848</small></span><span class="tag">标准网银</span></button>
+            <button class="passkey-card passkey-gold" type="button" data-passkey="zhangjg"><span class="chip chip-gold" aria-hidden="true"></span><span class="passkey-copy"><b>张建国</b><small>安享颐年卡 · 尾号 0921</small></span><span class="tag">关怀模式</span></button>
+          </div>
+          <div class="auth-footnote">受银行级会话隔离与 SHA-256 完整性校验保护</div>
+        </div>
+        <div id="registerPane" class="auth-pane is-hidden">
+          <div class="auth-heading"><span class="eyebrow">DIGITAL ONBOARDING</span><h2>开立个人数字银行账户</h2><p>通过实名认证即可即时激活多维资金口袋、智能账单审计与专属财富管家服务。</p></div>
+          <form id="registerForm" novalidate>
+            <div class="form-two-up"><label class="field"><span>姓名</span><input id="registerName" placeholder="请输入您的姓名"></label><label class="field"><span>登录账号</span><input id="registerUsername" autocomplete="username" placeholder="4–32 位英文账号"></label></div>
+            <label class="field"><span>登录密码</span><span class="input-shell"><input id="registerPassword" type="password" autocomplete="new-password" placeholder="至少 6 位"><button class="password-toggle" type="button" data-password-toggle="registerPassword" aria-label="切换密码显示状态"></button></span></label>
+            <div class="field"><span>账户模式</span><div id="registerType" class="mode-cards" role="radiogroup" aria-label="账户模式">
+              <button class="mode-card" type="button" role="radio" aria-checked="true" data-mode="standard"><b>标准个人网银</b><small>适合日常财富管理、专项口袋调拨与多维收支审计</small></button>
+              <button class="mode-card" type="button" role="radio" aria-checked="false" data-mode="elder"><b>长辈关怀版</b><small>大字号界面、语音播报辅助与高危免密代扣主动拦截</small></button>
+            </div></div>
+            <div id="registerError" class="inline-error" aria-live="polite"></div>
+            <button class="button button-primary button-wide" type="submit">立即开立账户</button>
+          </form>
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <div id="appView" class="app-shell is-hidden">
+    <header class="topbar">
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 19.5 16 8l9 11.5M11 22.5l5-6.4 5 6.4"/></svg></span><span><b>Easier-banking</b><small>PERSONAL FINANCIAL INTELLIGENCE</small></span></div>
+      <div class="topbar-actions">
+        <span id="cloudStatus" class="cloud-pill checking"><i></i><span>云端 AI 链路检测中</span></span>
+        <button id="accountPill" class="account-pill" type="button" title="当前登录储户"><span class="status-dot"></span><span id="accountLabel">正在读取账户</span><small id="accountKyc">KYC 已核验</small></button>
+        <button id="themeToggle" class="icon-button" type="button" aria-label="切换日间或夜间主题" title="切换主题"></button>
+        <button id="elderToggleTop" class="text-button" type="button">长辈关怀: 关</button>
+        <button id="switchAccount" class="text-button" type="button">切换账户</button>
+        <button id="logoutBtn" class="text-button danger-text" type="button">退出登录</button>
+      </div>
+    </header>
+    <main class="workspace">
+      <section class="assistant-panel panel">
+        <header class="assistant-head"><div><span class="eyebrow">PRIVATE BANKING ASSISTANT</span><h2>个人金融助理</h2></div><span class="online-pill"><i></i>安全链路在线</span></header>
+        <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+        <div class="quick-head"><span>常用指令</span><span id="quickModeHint">长辈关怀话术</span><button id="customPrompt" type="button">+ 自定义</button></div>
+        <div id="quickActions" class="quick-actions"></div>
+        <form id="chatForm" class="composer">
+          <textarea id="chatInput" rows="2" placeholder="输入自然语言指令，或键入 / 唤起快捷命令…"></textarea>
+          <button id="chatSend" class="send-button" type="submit">发送</button>
+          <div class="composer-foot"><span>重要操作会先进行安全确认</span><span id="engineLabel">当前模式: 自动路由 (腾讯云 GLM-4)</span></div>
+        </form>
+      </section>
+
+      <section class="workbench panel">
+        <nav class="workbench-tabs" role="tablist" aria-label="金融工作台">
+          <button class="active" type="button" role="tab" aria-selected="true" data-tab="overview">总览与智能执行</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="analytics">统计图表与订阅雷达</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="security">卡片持仓与安全审计</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="settings">系统与偏好设置</button>
+        </nav>
+        <div class="tab-stage">
+          <section id="tab-overview" class="tab-pane active" data-pane="overview">
+            <div class="section-heading"><div><span class="eyebrow">ACCOUNT OVERVIEW</span><h3>账户与可用额度</h3></div><span id="overviewMode" class="soft-badge">标准账户</span></div>
+            <div class="metric-grid">
+              <article class="metric-card metric-featured"><span>活期可用余额</span><strong id="availableBalance">0.00</strong><small id="accountTail">账户尾号待同步</small></article>
+              <article class="metric-card"><span>专项锁定资金</span><strong id="lockedBalance">0.00</strong><small>专项资金口袋已隔离</small></article>
+              <article class="metric-card"><span>今日剩余额度</span><strong id="dailyRemaining">0.00</strong><small id="dailyUsage">今日已使用 0.00 / 1,000.00</small></article>
+            </div>
+            <div class="limit-card"><div><span>今日安全转账限额</span><b id="limitText">0%</b></div><div class="progress"><i id="limitProgress"></i></div></div>
+            <div class="section-heading compact"><div><span class="eyebrow">REVOLUT POCKETS</span><h3>专项资金口袋</h3></div><span>账户内独立调拨</span></div>
+            <div id="pocketGrid" class="pocket-grid"></div>
+            <div class="section-heading compact"><div><span class="eyebrow">DAG · SAGA TRANSACTION</span><h3>任务流转与补偿</h3></div><button id="simulateSaga" class="outline-button" type="button">模拟外部接口异常并演示 SAGA 自动回滚</button></div>
+            <div id="sagaFlow" class="saga-flow">
+              <article class="done" data-node="1"><em class="node-time">18ms</em><i>1</i><b>意图与风控预审</b><small>最近事务 · 风控通过</small></article><span class="flow-arrow active" aria-hidden="true"></span>
+              <article class="done" data-node="2"><em class="node-time">45ms</em><i>2</i><b>专项口袋划拨</b><small>最近事务 · 资金已预留</small></article><span class="flow-arrow active" aria-hidden="true"></span>
+              <article class="done" data-node="3"><em class="node-time">62ms</em><i>3</i><b>外部商户 / 航司锁定</b><small>最近事务 · 商户已确认</small></article><span class="flow-arrow active" aria-hidden="true"></span>
+              <article class="done" data-node="4"><em class="node-time">9ms</em><i>4</i><b>账本提交 / 逆向补偿</b><small>最近事务 · SHA-256 已落盘</small></article>
+            </div>
+          </section>
+
+          <section id="tab-analytics" class="tab-pane" data-pane="analytics">
+            <div class="section-heading"><div><span class="eyebrow">CASH FLOW · 2026</span><h3>收支趋势与分类</h3></div><div class="segmented-small" id="chartSwitch"><button class="active" type="button" data-chart="line">折线</button><button type="button" data-chart="bar">柱状</button><button type="button" data-chart="doughnut">环形</button></div></div>
+            <div class="chart-card"><canvas id="cashChart" width="920" height="330"></canvas><div id="chartLegend" class="chart-legend"></div></div>
+            <div class="split-grid">
+              <article class="subpanel"><div class="subpanel-head"><h4>最近流水</h4><span id="transactionCount">0 笔</span></div><div id="transactionList" class="scroll-list"></div></article>
+              <article class="subpanel"><div class="subpanel-head"><h4>异常交易</h4><span id="abnormalCount">0 项</span></div><div id="abnormalList" class="scroll-list"></div></article>
+            </div>
+            <div class="section-heading compact"><div><span class="eyebrow">SUBSCRIPTION RADAR</span><h3>周期代扣与异常拦截</h3></div><span>风险协议可即时解除</span></div>
+            <div id="subscriptionList" class="subscription-list"></div>
+          </section>
+
+          <section id="tab-security" class="tab-pane" data-pane="security">
+            <div class="section-heading"><div><span class="eyebrow">PORTFOLIO & CARDS</span><h3>银行卡与资产持仓</h3></div><span id="cardCount" class="soft-badge">0 张卡</span></div>
+            <div id="cardDeck" class="card-deck"></div><div id="holdingList" class="holding-list"></div>
+            <div class="section-heading compact"><div><span class="eyebrow">SECURITY CORE</span><h3>SHA-256 账户安全态势与审计链</h3></div><div class="button-row"><button id="verifyChain" class="outline-button" type="button">校验全链完整性</button><button id="resetDemo" class="outline-button danger-outline" type="button">恢复初始数据</button></div></div>
+            <div class="security-summary"><div class="score-ring"><strong id="riskScore">0</strong><span>/ 100</span></div><div><b>实时风险控制评分</b><p id="securityText">账户安全态势正在载入。</p></div><div class="security-metrics"><span>高危拦截<b id="blockedCount">0</b></span><span>连续失败<b id="failureCount">0</b></span></div></div>
+            <div id="hashChain" class="hash-chain"></div>
+          </section>
+
+          <section id="tab-settings" class="tab-pane" data-pane="settings">
+            <div class="section-heading"><div><span class="eyebrow">PREFERENCES</span><h3>系统与偏好设置</h3></div><div class="settings-head-actions"><span id="prefsSaveStatus">即时生效</span><button id="savePreferences" class="outline-button" type="button">保存偏好</button></div></div>
+            <div class="settings-bento">
+              <article class="bento-card">
+                <div class="bento-head"><span class="bento-icon">◌</span><div><span class="eyebrow">ACCESSIBILITY</span><h4>无障碍与全龄关怀</h4></div></div>
+                <div class="setting-row"><div><b>长辈关怀模式</b><small>全局字号放大 25%，聊天记录保持连续</small></div><button id="elderToggleSetting" class="switch" type="button" role="switch" aria-checked="false"><i></i></button></div>
+                <div class="setting-row"><div><b>自动语音播报</b><small>助理回复后温和播报重点</small></div><button id="ttsToggle" class="switch" type="button" role="switch" aria-checked="false"><i></i></button></div>
+                <div class="setting-block voice-settings"><div><b>语音管家音色</b><small id="voiceEngineHint">正在检索 Neural 自然语音…</small></div>
+                  <div class="voice-controls">
+                    <div class="voice-pills" role="radiogroup" aria-label="语音管家音色">
+                      <button class="active" type="button" data-voice-gender="female" role="radio" aria-checked="true">温婉女声 · 首席管家</button>
+                      <button type="button" data-voice-gender="male" role="radio" aria-checked="false">沉稳男声 · 财富顾问</button>
+                    </div>
+                    <button id="voicePreviewButton" class="outline-button voice-preview" type="button">🔊 试听语音</button>
+                  </div>
+                </div>
+                <div class="setting-block"><div><b>语速调节</b><small id="ttsRateLabel">标准语速</small></div><input id="ttsRate" class="range" type="range" min="0.7" max="1.3" step="0.1" value="1"></div>
+              </article>
+              <article class="bento-card">
+                <div class="bento-head"><span class="bento-icon">⌁</span><div><span class="eyebrow">INTERACTION & LIMITS</span><h4>交互体验与风控阈值</h4></div></div>
+                <div class="setting-row"><div><b>操作微音效</b><small>提交、校验与任务完成提示</small></div><button id="soundToggle" class="switch" type="button" role="switch" aria-checked="true"><i></i></button></div>
+                <div class="setting-block"><div><b>默认图表类型</b><small>进入统计视图时自动应用</small></div><div class="segmented-small" id="defaultChart"><button class="active" type="button" data-value="line">折线</button><button type="button" data-value="bar">柱状</button><button type="button" data-value="doughnut">环形</button></div></div>
+                <div class="setting-block"><div><b>单日风控限额</b><small id="riskLimitLabel">¥1,000.00</small></div><input id="riskLimit" class="range" type="range" min="500" max="5000" step="500" value="1000"></div>
+              </article>
+            </div>
+            <section class="engine-console bento-wide">
+              <div class="engine-console-head"><div><span class="eyebrow">AI ENGINE ROUTING CONSOLE</span><h3>AI 引擎路由控制台</h3></div><span id="latencyBadge" class="latency-badge">检测中</span></div>
+              <div class="engine-mode-switch" role="radiogroup" aria-label="AI 引擎模式">
+                <button type="button" class="active" data-engine-mode="cloud" role="radio" aria-checked="true">⚡ 云端大模型实时推理 <small>推荐</small></button>
+                <button type="button" data-engine-mode="local" role="radio" aria-checked="false">🛡️ 本地确定性引擎</button>
+              </div>
+              <div class="engine-monitor"><div class="engine-orbit"><i></i><i></i><i></i><span>AI</span></div><div><b id="enginePrimary">腾讯云 CloudBase 上海节点 · glm-4-flash</b><p id="engineMonitor">正在检测安全链路。</p><small id="engineFallback">三级容灾就绪：Tencent Gateway → DeepSeek/Relay → Local Rule Fallback</small></div></div>
+              <div class="engine-console-actions"><button id="probeGateway" class="outline-button" type="button">🔄 立即探测网关延迟</button><span id="probeResult">等待首次探测</span></div>
+              <details class="direct-config">
+                <summary>🔑 备用直连配置</summary>
+                <p>仅用于浏览器无法访问 Python 后端时的原生智谱通道。密钥只保存在当前浏览器会话，不写入项目文件。</p>
+                <label>智谱 / OpenAI 兼容 API Key<input id="directApiKey" type="password" autocomplete="off" placeholder="sk-...（仅当前标签页有效）"></label>
+                <div class="button-row"><button id="saveDirectKey" class="outline-button" type="button">启用备用直连</button><button id="clearDirectKey" class="outline-button" type="button">清除密钥</button></div>
+              </details>
+            </section>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-card"><header><div><span class="eyebrow" id="modalKicker">SECURE ACTION</span><h2 id="modalTitle">安全确认</h2><p id="modalSubtitle"></p></div><button id="modalClose" class="icon-button" type="button" aria-label="关闭">×</button></header><div id="modalBody" class="modal-body"></div><footer id="modalActions" class="modal-actions"></footer></div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script>
+    (function () {
+      var staticBase = location.protocol === "file:" ? "./" : "/static/";
+      var voiceEngine = document.createElement("script");
+      voiceEngine.src = staticBase + "tts-engine.js";
+      voiceEngine.onload = function () {
+        var application = document.createElement("script");
+        application.src = staticBase + "app.js";
+        application.defer = true;
+        document.body.appendChild(application);
+      };
+      document.body.appendChild(voiceEngine);
+    })();
+  </script>
+</body>
+</html>
