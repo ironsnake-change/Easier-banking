@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import sqlite3
@@ -415,7 +414,7 @@ class SecurityGateway:
         demo_hint = None
         if level == "RED":
             otp = f"{secrets.randbelow(1_000_000):06d}"
-            pepper = os.getenv("OTP_PEPPER", config.GATEWAY_APP_SECRET)
+            pepper = config.OTP_PEPPER
             otp_hash = hmac.new(pepper.encode("utf-8"), f"{action_id}|{otp}".encode("utf-8"), hashlib.sha256).hexdigest()
             expires_epoch = int(time.time()) + 120
             connection = database.get_connection()
@@ -428,7 +427,7 @@ class SecurityGateway:
                 connection.commit()
             finally:
                 connection.close()
-            if os.getenv("DEMO_MODE", "0") == "1":
+            if config.demo_mode():
                 demo_hint = {"otp": otp, "expires_in": 120}
         self.log_event(user, event, tool_name, level, {"pending_action_id": action_id, "arguments": args, "risk_reason": pending["risk_reason"]}, "PENDING")
         result = {"gate_status": "PENDING_YELLOW_CONFIRM" if level == "YELLOW" else "PENDING_RED_MFA",
@@ -502,7 +501,7 @@ class SecurityGateway:
                     challenge = None
             finally:
                 connection.close()
-            pepper = os.getenv("OTP_PEPPER", config.GATEWAY_APP_SECRET)
+            pepper = config.OTP_PEPPER
             expected = hmac.new(
                 pepper.encode("utf-8"),
                 f"{pending_action_id}|{str(sms_code or '')}".encode("utf-8"),

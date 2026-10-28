@@ -44,7 +44,7 @@
           <div class="passkey-heading"><span>已绑定通行密钥 · 快速登录</span><small>免密安全验证</small></div>
           <div class="passkey-grid">
             <button class="passkey-card" type="button" data-passkey="linyan"><span class="chip chip-silver" aria-hidden="true"></span><span class="passkey-copy"><b>林砚</b><small>私人银行卡 · 尾号 8848</small></span><span class="tag">标准网银</span></button>
-            <button class="passkey-card passkey-gold" type="button" data-passkey="zhangjg"><span class="chip chip-gold" aria-hidden="true"></span><span class="passkey-copy"><b>张建国</b><small>安享颐年卡 · 尾号 0921</small></span><span class="tag">关怀模式</span></button>
+            <button class="passkey-card passkey-gold" type="button" data-passkey="zhangjg"><span class="chip chip-gold" aria-hidden="true"></span><span class="passkey-copy"><b>&#24352;&#24314;&#22269;</b><small>安享颐年卡 · 尾号 0921</small></span><span class="tag">关怀模式</span></button>
           </div>
           <div class="auth-footnote">受银行级会话隔离与 SHA-256 完整性校验保护</div>
         </div>
@@ -70,6 +70,7 @@
       <div class="brand-lockup"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 19.5 16 8l9 11.5M11 22.5l5-6.4 5 6.4"/></svg></span><span><b>Easier-banking</b><small>PERSONAL FINANCIAL INTELLIGENCE</small></span></div>
       <div class="topbar-actions">
         <span id="cloudStatus" class="cloud-pill checking"><i></i><span>云端 AI 链路检测中</span></span>
+        <span id="runtimeModeBadge" class="cloud-pill checking" aria-live="polite"><i></i><span>模式：检测中</span></span>
         <button id="accountPill" class="account-pill" type="button" title="当前登录储户"><span class="status-dot"></span><span id="accountLabel">正在读取账户</span><small id="accountKyc">KYC 已核验</small></button>
         <button id="themeToggle" class="icon-button" type="button" aria-label="切换日间或夜间主题" title="切换主题"></button>
         <button id="elderToggleTop" class="text-button" type="button">长辈关怀: 关</button>
@@ -165,7 +166,7 @@
               <div class="engine-console-head"><div><span class="eyebrow">AI ENGINE ROUTING CONSOLE</span><h3>AI 引擎路由控制台</h3></div><span id="latencyBadge" class="latency-badge">检测中</span></div>
               <div class="engine-mode-switch" role="radiogroup" aria-label="AI 引擎模式">
                 <button type="button" class="active" data-engine-mode="cloud" role="radio" aria-checked="true">⚡ 云端大模型实时推理 <small>推荐</small></button>
-                <button type="button" data-engine-mode="local" role="radio" aria-checked="false">🛡️ 本地确定性引擎</button>
+                <button type="button" data-engine-mode="local" role="radio" aria-checked="false">🛡️ 离线只读缓存</button>
               </div>
               <div class="engine-monitor"><div class="engine-orbit"><i></i><i></i><i></i><span>AI</span></div><div><b id="enginePrimary">腾讯云 CloudBase 上海节点 · glm-4-flash</b><p id="engineMonitor">正在检测安全链路。</p><small id="engineFallback">三级容灾就绪：Tencent Gateway → DeepSeek/Relay → Local Rule Fallback</small></div></div>
               <div class="engine-console-actions"><button id="probeGateway" class="outline-button" type="button">🔄 立即探测网关延迟</button><span id="probeResult">等待首次探测</span></div>

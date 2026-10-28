@@ -15,6 +15,8 @@ import httpx
 
 from core import config, database, policy, workspace
 from core.compliance import is_clearly_off_topic, refusal_text
+from core.gateway_guard import cloud_guard
+from core.privacy import redact_sensitive_text
 from core.receipts import amount_in_chinese
 from core.security import security_gateway
 
@@ -166,18 +168,7 @@ def _amount_from_text(text: str) -> float:
 
 
 def _mask_card_numbers(text: str) -> str:
-    value = str(text or "")
-    value = re.sub(
-        r"(?<!\d)\d{4,8}[\s*-]*\*{4,}[\s-]*(\d{4})(?!\d)",
-        lambda match: "****" + match.group(1),
-        value,
-    )
-    value = re.sub(
-        r"(?<!\d)(?:\d[\s-]?){12,19}(?!\d)",
-        lambda match: "****" + re.sub(r"\D", "", match.group(0))[-4:],
-        value,
-    )
-    return value
+    return redact_sensitive_text(text)
 
 
 def _money(value: Any, default: float = 0.0) -> float:
@@ -892,7 +883,8 @@ def _append_transaction(connection: sqlite3.Connection, user_id: str, account_id
 
 
 def _audit_receipt(user_id: str, action: dict[str, Any], summary: str, amount: float,
-                   balance_after: float, level: str, audit: dict[str, Any]) -> dict[str, Any]:
+                   balance_after: float, level: str, audit: dict[str, Any], *,
+                   execution_ms: float, audit_ms: float) -> dict[str, Any]:
     now = datetime.now().astimezone()
     profile = workspace.get_user_profile(user_id)
     params = action.get("params", {})
@@ -913,10 +905,10 @@ def _audit_receipt(user_id: str, action: dict[str, Any], summary: str, amount: f
         "previous_hash": audit.get("prev_hash", ""),
         "summary": summary,
         "traceability_chain": [
-            {"stage": "意图解析", "channel": "GLM-4-Flash · bank_action", "detail": "自然语言意图已转为受控业务动作", "duration_ms": 18},
-            {"stage": "风控核验", "channel": "银行风控引擎", "detail": f"{level} 分级授权已通过，账户安全态势正常", "duration_ms": 24},
-            {"stage": "事务执行", "channel": "DAG · SAGA", "detail": "业务节点提交完成并保留逆向补偿凭据", "duration_ms": 31},
-            {"stage": "账本落盘", "channel": "SHA-256 审计链", "detail": "账户流水与电子回单已写入", "duration_ms": 9},
+            {"stage": "意图解析", "channel": "已确认业务提案", "detail": "动作已通过规范化与实体校验"},
+            {"stage": "风控核验", "channel": "policy.classify", "detail": f"{level} 分级授权已通过"},
+            {"stage": "事务执行", "channel": "SQLite 原子事务", "detail": "业务表变更已在同一事务提交", "duration_ms": execution_ms},
+            {"stage": "账本落盘", "channel": "SHA-256 审计链", "detail": "审计事件与电子回单已写入", "duration_ms": audit_ms},
         ],
     }
 
@@ -929,6 +921,7 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
     params = action.get("params", {})
     if name not in ALLOWED_ACTIONS:
         return {"status": "error", "summary": "业务动作不在许可白名单中。", "data": {}}
+    execution_started = time.perf_counter()
     connection = database.get_connection()
     connection.row_factory = sqlite3.Row
     connection.isolation_level = None
@@ -1214,35 +1207,57 @@ def execute_action(user_id: str, action: dict[str, Any], *, level: str) -> dict[
     finally:
         connection.close()
 
+    execution_ms = round((time.perf_counter() - execution_started) * 1000, 3)
+    audit_started = time.perf_counter()
     audit = policy.audit_event(user_id, "AI_BANK_ACTION_EXECUTED", name, level, {
         "action": action, "summary": summary, "amount": amount,
     })
-    receipt = _audit_receipt(user_id, action, summary, amount, balance_after, level, audit)
+    audit_ms = round((time.perf_counter() - audit_started) * 1000, 3)
+    receipt = _audit_receipt(
+        user_id, action, summary, amount, balance_after, level, audit,
+        execution_ms=execution_ms, audit_ms=audit_ms,
+    )
     return {"status": "success", "summary": summary, "data": data, "receipt": receipt, "level": level}
 
 
 class AIBankingAssistant:
     def __init__(self, timeout: float = 9.0):
-        self.timeout = max(2.0, min(float(timeout), 15.0))
+        self.timeout = min(config.CLOUD_TIMEOUT_SECONDS, max(2.0, min(float(timeout), 15.0)))
         self.last_latency_ms: float | None = None
         self.last_channel = "local_semantic"
+        self.last_fallback_reason: str | None = None
+        self.cloud_guard = cloud_guard
 
-    def probe(self) -> dict[str, Any]:
+    def probe(self, user_id: str = "__probe__") -> dict[str, Any]:
+        self.last_fallback_reason = None
+        if not config.gateway_configured():
+            self.last_channel = "local_rule_fallback"
+            return {"status": "OFFLINE", "channel": "local_rule_fallback", "model": "local-semantic",
+                    "latency_ms": None, "reason": "gateway_not_configured"}
+        allowed, reason = self.cloud_guard.before_call(user_id)
+        if not allowed:
+            self.last_fallback_reason = reason
+            self.last_channel = "local_rule_fallback"
+            return {"status": "OFFLINE", "channel": "local_rule_fallback", "model": "local-semantic",
+                    "latency_ms": None, "reason": reason}
         started = time.perf_counter()
         try:
             response = httpx.post(
                 config.GATEWAY_BASE_URL.rstrip("/") + "/chat/completions",
                 headers={"X-App-Secret": config.GATEWAY_APP_SECRET, "Content-Type": "application/json"},
                 json={"model": config.GATEWAY_MODEL, "messages": [{"role": "user", "content": "只回复 ONLINE"}], "max_tokens": 8, "temperature": 0},
-                timeout=min(self.timeout, 8.0),
+                timeout=config.CLOUD_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
             latency = round((time.perf_counter() - started) * 1000, 1)
+            self.cloud_guard.record_success(user_id)
             self.last_latency_ms = latency
             self.last_channel = "tencent_gateway"
             return {"status": "ONLINE", "channel": "tencent_gateway", "model": config.GATEWAY_MODEL,
                     "latency_ms": latency, "endpoint": config.GATEWAY_BASE_URL}
         except Exception as exc:
+            self.last_fallback_reason = self.cloud_guard.record_failure(user_id)
+            self.last_channel = "local_rule_fallback"
             return {"status": "OFFLINE", "channel": "local_rule_fallback", "model": "local-semantic",
                     "latency_ms": None, "error": str(exc)[:160]}
 
@@ -1266,7 +1281,16 @@ class AIBankingAssistant:
 
     def _cloud_reply(self, message: str, context: dict[str, Any], elder_mode: bool,
                      conversation: list[dict[str, str]] | None = None,
-                     action_state: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                     action_state: dict[str, Any] | None = None,
+                     user_id: str = "anonymous") -> dict[str, Any] | None:
+        self.last_fallback_reason = None
+        if not config.gateway_configured():
+            self.last_fallback_reason = "offline_mode"
+            return None
+        allowed, reason = self.cloud_guard.before_call(user_id)
+        if not allowed:
+            self.last_fallback_reason = reason
+            return None
         context_text = _mask_card_numbers(json.dumps(context, ensure_ascii=False, separators=(",", ":")))
         state_text = _mask_card_numbers(json.dumps(action_state or {}, ensure_ascii=False, separators=(",", ":")))
         started = time.perf_counter()
@@ -1277,7 +1301,7 @@ class AIBankingAssistant:
                  "\n当前模式：" + ("长辈关怀模式，请用温和、简短、清晰的表达。" if elder_mode else "标准私人银行模式。")},
             ]
             messages.extend(conversation or [])
-            messages.append({"role": "user", "content": message})
+            messages.append({"role": "user", "content": _mask_card_numbers(message)})
             response = httpx.post(
                 config.GATEWAY_BASE_URL.rstrip("/") + "/chat/completions",
                 headers={"X-App-Secret": config.GATEWAY_APP_SECRET, "Content-Type": "application/json"},
@@ -1287,16 +1311,18 @@ class AIBankingAssistant:
                     "temperature": 0.15,
                     "max_tokens": 650,
                 },
-                timeout=self.timeout,
+                timeout=config.CLOUD_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
             payload = response.json()
             content = payload.get("choices", [{}])[0].get("message", {}).get("content") or ""
+            self.cloud_guard.record_success(user_id)
             latency = round((time.perf_counter() - started) * 1000, 1)
             self.last_latency_ms = latency
             self.last_channel = "tencent_gateway"
             return {"content": content, "latency_ms": latency, "model": payload.get("model") or config.GATEWAY_MODEL}
         except Exception:
+            self.last_fallback_reason = self.cloud_guard.record_failure(user_id)
             return None
 
     def _local_reply(self, message: str, context: dict[str, Any], elder_mode: bool) -> str:
@@ -1432,9 +1458,10 @@ class AIBankingAssistant:
             self.last_channel = channel
         else:
             conversation = self._conversation_context(user_id, message)
+            self.last_fallback_reason = None
             cloud = self._cloud_reply(
                 message, context, elder_mode,
-                conversation=conversation, action_state=action_state,
+                conversation=conversation, action_state=action_state, user_id=user_id,
             )
             if cloud:
                 action, visible = _extract_json_action(cloud["content"])
@@ -1500,6 +1527,14 @@ class AIBankingAssistant:
 
         if identity_claim:
             visible = "身份声明不会改变账户权限，也不会绕过银行授权流程。" + visible
+        if cloud is None and self.last_fallback_reason in {"rate_limited", "circuit_open", "offline_mode", "cloud_error"}:
+            fallback_note = {
+                "rate_limited": "云端调用已达每分钟上限，已自动改用本地安全规则。",
+                "circuit_open": "云端通道连续异常，已熔断并改用本地安全规则。",
+                "offline_mode": "未配置可用云端网关，已使用本地安全规则。",
+                "cloud_error": "云端暂不可用，已自动改用本地安全规则。",
+            }[self.last_fallback_reason]
+            visible = fallback_note + visible
         level = "L1"
         remaining = _money(context["risk_limit"]["remaining"])
         daily_limit = _money(context["risk_limit"]["daily_limit"])
@@ -1532,6 +1567,7 @@ class AIBankingAssistant:
             "remaining_limit": remaining,
             "daily_limit": daily_limit,
             "tts_text": tts_text,
+            "cloud_fallback_reason": self.last_fallback_reason if cloud is None else None,
         }
 
 

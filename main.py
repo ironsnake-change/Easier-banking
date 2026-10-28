@@ -6,11 +6,13 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 import json
+import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +29,7 @@ from core.security import PENDING_ACTIONS, _SESSION_STATE, security_gateway
 
 DEFAULT_USER = workspace.DEFAULT_USER_ID
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+logger = logging.getLogger("uvicorn.error")
 
 
 def _legacy_user(value: str | None) -> str:
@@ -129,7 +132,7 @@ def build_live_state(user_id: str = DEFAULT_USER) -> dict[str, Any]:
             "daily_transfer_limit": policy.effective_daily_limit(user_id),
             "elderly_mode": elder,
         },
-        "greeting": (f"张叔叔，您好。今天也陪您把每一笔钱看清楚。" if user_id == DEFAULT_USER and elder
+        "greeting": (f"{user['name']}，您好。今天也陪您把每一笔钱看清楚。" if user_id == DEFAULT_USER and elder
                      else f"{user['name']}，您好。今天也陪您把每一笔钱看清楚。" if elder
                      else f"林砚，您好。您的资金与提醒已准备好。" if user_id == workspace.STANDARD_USER_ID
                      else f"{user['name']}，您好。您的金融工作台已准备好。"),
@@ -159,21 +162,34 @@ def build_live_state(user_id: str = DEFAULT_USER) -> dict[str, Any]:
             "is_integrity_valid": chain["is_integrity_valid"],
         },
         "engine_status": {
-            "primary": (f"腾讯云 CloudBase 上海节点直连 ({config.GATEWAY_MODEL}) [已挂载 X-App-Secret 鉴权 | "
-                        + (f"实测均值 {banking_agent.router.average_gateway_latency_ms:.0f}ms]" if banking_agent.router.average_gateway_latency_ms is not None else "等待首个网关样本]")),
-            "fallback": "三级容灾就绪 (Tencent Gateway -> DeepSeek/Relay -> Local Rule Fallback)",
+            "mode": config.gateway_mode(),
+            "primary": (
+                f"腾讯云 CloudBase 上海节点直连 ({config.GATEWAY_MODEL}) [受限评委凭证已配置]"
+                if config.gateway_configured()
+                else "离线规则引擎 [网关未配置]"
+            ),
+            "fallback": "腾讯云网关 -> DeepSeek/Relay -> 本地规则引擎",
             "gateway_base_url": config.GATEWAY_BASE_URL,
             "model": config.GATEWAY_MODEL,
+            "configured": config.gateway_configured(),
             "route_channel": banking_agent.router.last_channel,
             "last_latency_ms": banking_agent.router.last_latency_ms,
+            "cloud_guard": ai_banking_assistant.cloud_guard.status(user_id),
         },
     }
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    config.load_env_file()
     workspace.ensure_workspace_schema()
     policy.ensure_schema()
+    logger.info(
+        "Easier-banking started | demo_mode=%s | gateway_mode=%s | session_ttl_seconds=%s",
+        "1" if config.demo_mode() else "0",
+        config.gateway_mode(),
+        config.SESSION_TTL_SECONDS,
+    )
     yield
 
 
@@ -276,7 +292,13 @@ def home():
 @app.get("/api/health")
 def health():
     workspace.ensure_workspace_schema()
-    return {"status": "ok", "database": str(database.DB_PATH), "time": _now_display()}
+    return {
+        "status": "ok",
+        "database": str(database.DB_PATH),
+        "time": _now_display(),
+        "demo_mode": config.demo_mode(),
+        "gateway_mode": config.gateway_mode(),
+    }
 
 
 @app.get("/api/auth/demo-accounts")
@@ -289,10 +311,26 @@ def demo_accounts():
 
 
 @app.post("/api/auth/login")
-def login(request: LoginRequest):
+def login(request: LoginRequest, http_request: Request):
+    client_ip = http_request.client.host if http_request.client else "unknown"
+    locked_for = workspace.login_lock_remaining(request.username_or_card, client_ip)
+    if locked_for:
+        raise HTTPException(
+            status_code=429,
+            detail="连续登录失败次数过多，请稍后再试。",
+            headers={"Retry-After": str(locked_for)},
+        )
     account = workspace.authenticate(request.username_or_card, request.password)
     if not account:
+        locked_for = workspace.record_login_failure(request.username_or_card, client_ip)
+        if locked_for:
+            raise HTTPException(
+                status_code=429,
+                detail="连续登录失败次数过多，账户已临时锁定5分钟。",
+                headers={"Retry-After": str(locked_for)},
+            )
         raise HTTPException(status_code=401, detail="账号、卡号尾号或密码不正确")
+    workspace.clear_login_failures(request.username_or_card, client_ip)
     token = workspace.create_session(account["user_id"])
     return {"status": "success", "session_token": token, "user_profile": workspace.get_user_profile(account["user_id"]),
             "preferences": workspace.get_preferences(account["user_id"]), "live_state": build_live_state(account["user_id"])}
@@ -594,8 +632,9 @@ def assistant_action_deprecated():
 
 
 @app.post("/api/assistant/probe")
-def assistant_probe():
-    return ai_banking_assistant.probe()
+def assistant_probe(x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
+    user_id = _session_user(x_session_token)
+    return ai_banking_assistant.probe(user_id)
 
 
 @app.post("/api/compliance/precheck")
@@ -739,6 +778,8 @@ def confirm_subscription_cancellation(
 
 @app.post("/api/security/reset-breaker")
 def reset_breaker(x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
+    if not config.demo_mode():
+        raise HTTPException(status_code=403, detail="仅 DEMO_MODE=1 时允许重置风控熔断。")
     user_id = _session_user(x_session_token)
     return {"status": "success", "security_status": security_gateway.reset_circuit_breaker(user_id), "live_state": build_live_state(user_id)}
 
@@ -751,13 +792,17 @@ def verify_chain(x_session_token: str | None = Header(default=None, alias="X-Ses
 
 @app.post("/api/system/reset-demo")
 def reset_demo(x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
-    _session_user(x_session_token)
+    if not config.demo_mode():
+        raise HTTPException(status_code=403, detail="仅 DEMO_MODE=1 时允许重置演示数据库。")
+    user_id = _session_user(x_session_token)
     workspace.reset_workspace_data()
-    for table in ("audit_logs", "security_sessions", "pending_action_otp", "pending_actions", "agent_dag_tasks"):
+    for table in ("security_sessions", "pending_action_otp", "pending_actions", "agent_dag_tasks"):
         connection = database.get_connection()
         try:
-            connection.execute(f"DROP TABLE IF EXISTS {table}")
+            connection.execute(f"DELETE FROM {table}")
             connection.commit()
+        except sqlite3.OperationalError:
+            connection.rollback()
         finally:
             connection.close()
     PENDING_ACTIONS.clear()
@@ -765,7 +810,21 @@ def reset_demo(x_session_token: str | None = Header(default=None, alias="X-Sessi
     from core.agent import _TASKS
     _TASKS.clear()
     workspace.ensure_workspace_schema()
-    return {"status": "success", "database": str(database.DB_PATH), "live_state": build_live_state(DEFAULT_USER)}
+    security_gateway.log_event(
+        user_id,
+        "DEMO_DATABASE_RESET",
+        "reset_demo",
+        "GREEN",
+        {"audit_preserved": True, "new_session_required": True},
+        "SUCCESS",
+    )
+    return {
+        "status": "success",
+        "database": str(database.DB_PATH),
+        "session_invalidated": True,
+        "audit_preserved": True,
+        "live_state": build_live_state(DEFAULT_USER),
+    }
 
 
 __all__ = ["app", "build_live_state"]

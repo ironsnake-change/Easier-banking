@@ -211,7 +211,7 @@ class BankingAgent:
             response["compliance_badge"] = "🛡️ 业务合规边界提示"
             response["route_channel"] = "domain_guardrail"
             return response
-        plans = self.router.plan(user_message, force_local_fallback=force_local_fallback)
+        plans = self.router.plan(user_message, force_local_fallback=force_local_fallback, user_id=user_id)
         if not plans:
             task = DAGTask("DAG-" + uuid.uuid4().hex[:10].upper(), user_id, user_message, [], "CLARIFICATION_NEEDED")
             return self._response(task, "CLARIFICATION_NEEDED", "请告诉我您想查询或办理哪项业务。", elder_mode)

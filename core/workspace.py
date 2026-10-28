@@ -15,12 +15,13 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core import database
+from core import config, database
 
 DEMO_PASSWORD = "Demo@2026"
 DEFAULT_USER_ID = "U1001"
@@ -111,7 +112,14 @@ def ensure_workspace_schema(db_path: str | Path | None = None) -> Path:
                     token_hash TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
+                    last_seen_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS login_attempts (
+                    attempt_key TEXT PRIMARY KEY,
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    window_started_epoch REAL NOT NULL,
+                    locked_until_epoch REAL NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_time ON chat_messages(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_pockets_user ON pockets(user_id);
@@ -151,6 +159,11 @@ def ensure_workspace_schema(db_path: str | Path | None = None) -> Path:
                 for column, definition in extensions.items():
                     if column not in existing_columns:
                         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            session_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(app_sessions)").fetchall()
+            }
+            if "expires_at" not in session_columns:
+                connection.execute("ALTER TABLE app_sessions ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
             _seed_zhangjg(connection)
             _seed_linyan(connection)
             connection.executemany(
@@ -322,11 +335,12 @@ def create_session(user_id: str, db_path: str | Path | None = None) -> str:
     ensure_workspace_schema(db_path)
     token = secrets.token_urlsafe(32)
     stamp = _now()
+    expires_at = (datetime.now().astimezone() + timedelta(seconds=config.SESSION_TTL_SECONDS)).isoformat(timespec="seconds")
     connection = database.get_connection(db_path)
     try:
         connection.execute(
-            "INSERT INTO app_sessions (token_hash,user_id,created_at,last_seen_at) VALUES (?,?,?,?)",
-            (hashlib.sha256(token.encode()).hexdigest(), user_id, stamp, stamp),
+            "INSERT INTO app_sessions (token_hash,user_id,created_at,last_seen_at,expires_at) VALUES (?,?,?,?,?)",
+            (hashlib.sha256(token.encode()).hexdigest(), user_id, stamp, stamp, expires_at),
         )
         connection.commit()
     finally:
@@ -341,8 +355,20 @@ def resolve_session(token: str | None, db_path: str | Path | None = None) -> str
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     connection = database.get_connection(db_path)
     try:
-        row = connection.execute("SELECT user_id FROM app_sessions WHERE token_hash=?", (token_hash,)).fetchone()
+        row = connection.execute("SELECT user_id,expires_at FROM app_sessions WHERE token_hash=?", (token_hash,)).fetchone()
         if not row:
+            return None
+        try:
+            expires_at = datetime.fromisoformat(str(row["expires_at"]))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.astimezone()
+        except (TypeError, ValueError):
+            connection.execute("DELETE FROM app_sessions WHERE token_hash=?", (token_hash,))
+            connection.commit()
+            return None
+        if expires_at <= datetime.now().astimezone():
+            connection.execute("DELETE FROM app_sessions WHERE token_hash=?", (token_hash,))
+            connection.commit()
             return None
         connection.execute("UPDATE app_sessions SET last_seen_at=? WHERE token_hash=?", (_now(), token_hash))
         connection.commit()
@@ -357,6 +383,78 @@ def delete_session(token: str | None, db_path: str | Path | None = None) -> None
     connection = database.get_connection(db_path)
     try:
         connection.execute("DELETE FROM app_sessions WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _login_attempt_keys(username_or_card: str, client_ip: str) -> tuple[str, str]:
+    return (
+        "username:" + str(username_or_card or "").strip().lower(),
+        "ip:" + str(client_ip or "unknown").strip(),
+    )
+
+
+def login_lock_remaining(username_or_card: str, client_ip: str, db_path: str | Path | None = None) -> int:
+    ensure_workspace_schema(db_path)
+    keys = _login_attempt_keys(username_or_card, client_ip)
+    now = time.time()
+    connection = database.get_connection(db_path)
+    try:
+        rows = connection.execute(
+            "SELECT locked_until_epoch FROM login_attempts WHERE attempt_key IN (?,?)",
+            keys,
+        ).fetchall()
+    finally:
+        connection.close()
+    remaining = max((float(row["locked_until_epoch"] or 0) - now for row in rows), default=0.0)
+    return max(0, int(remaining + 0.999))
+
+
+def record_login_failure(username_or_card: str, client_ip: str, db_path: str | Path | None = None) -> int:
+    ensure_workspace_schema(db_path)
+    now = time.time()
+    connection = database.get_connection(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        locked_until = 0.0
+        for key in _login_attempt_keys(username_or_card, client_ip):
+            row = connection.execute(
+                "SELECT failure_count,window_started_epoch,locked_until_epoch FROM login_attempts WHERE attempt_key=?",
+                (key,),
+            ).fetchone()
+            count = int(row["failure_count"]) if row else 0
+            window_started = float(row["window_started_epoch"]) if row else now
+            active_lock = float(row["locked_until_epoch"]) if row else 0.0
+            if active_lock > now:
+                locked_until = max(locked_until, active_lock)
+                continue
+            if not row or now - window_started > config.LOGIN_FAILURE_WINDOW_SECONDS:
+                count = 0
+                window_started = now
+            count += 1
+            attempt_lock = now + config.LOGIN_LOCK_SECONDS if count >= config.LOGIN_MAX_FAILURES else 0.0
+            locked_until = max(locked_until, attempt_lock)
+            connection.execute(
+                "INSERT OR REPLACE INTO login_attempts "
+                "(attempt_key,failure_count,window_started_epoch,locked_until_epoch) VALUES (?,?,?,?)",
+                (key, count, window_started, attempt_lock),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return max(0, int((locked_until - now) + 0.999))
+
+
+def clear_login_failures(username_or_card: str, client_ip: str, db_path: str | Path | None = None) -> None:
+    ensure_workspace_schema(db_path)
+    keys = _login_attempt_keys(username_or_card, client_ip)
+    connection = database.get_connection(db_path)
+    try:
+        connection.execute("DELETE FROM login_attempts WHERE attempt_key IN (?,?)", keys)
         connection.commit()
     finally:
         connection.close()
@@ -526,7 +624,7 @@ def reset_workspace_data(db_path: str | Path | None = None) -> Path:
         for table in (
             "action_proposals", "limit_overrides", "audit_outbox",
             "app_sessions", "chat_messages", "pockets", "user_preferences", "auth_accounts",
-            "ai_session_state",
+            "ai_session_state", "login_attempts",
         ):
             connection.execute(f"DROP TABLE IF EXISTS {table}")
         connection.commit()
@@ -541,6 +639,7 @@ def reset_workspace_data(db_path: str | Path | None = None) -> Path:
 __all__ = [
     "DEMO_PASSWORD", "DEFAULT_USER_ID", "STANDARD_USER_ID", "ensure_workspace_schema",
     "authenticate", "create_session", "resolve_session", "delete_session", "register_account",
+    "login_lock_remaining", "record_login_failure", "clear_login_failures",
     "get_user_profile", "get_preferences", "update_preferences", "get_chat_messages",
     "append_chat_message", "get_pockets", "reset_workspace_data",
 ]

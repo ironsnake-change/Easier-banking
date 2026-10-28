@@ -19,7 +19,7 @@ from core.security import security_gateway
 PROPOSAL_TTL_SECONDS = max(30, int(os.getenv("ACTION_PROPOSAL_TTL_SECONDS", "120")))
 LIMIT_OVERRIDE_TTL_SECONDS = max(60, int(os.getenv("LIMIT_OVERRIDE_TTL_SECONDS", "900")))
 OTP_MAX_ATTEMPTS = 3
-OTP_PEPPER = os.getenv("OTP_PEPPER", config.GATEWAY_APP_SECRET)
+OTP_PEPPER = config.OTP_PEPPER
 
 ACTION_LABELS = {
     "cancel_subscription": "周期代扣拦截",
@@ -496,7 +496,7 @@ def create_proposal(user_id: str, action: dict[str, Any], *, message_id: int | N
     if info["level"] == "L3":
         otp = f"{secrets.randbelow(1_000_000):06d}"
         otp_hash = _otp_hash(proposal_id, otp)
-        if os.getenv("DEMO_MODE", "0") == "1":
+        if config.demo_mode():
             demo_hint = {"otp": otp, "expires_at": expires_at, "notice": "仅 DEMO_MODE=1 时返回，生产环境必须接入短信或验证器"}
     if normalized["action"] == "transfer":
         base, used, _ = _base_limit(user_id)

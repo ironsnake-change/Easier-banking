@@ -115,7 +115,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
 def _seed(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("U1001", "张建国", 65, "C2(稳健型)", 400.0, 1, 0, 0, 0),
+        ("U1001", "\u5f20\u5efa\u56fd", 65, "C2(稳健型)", 400.0, 1, 0, 0, 0),
     )
     connection.execute(
         "INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?)",

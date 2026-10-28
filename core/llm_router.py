@@ -7,6 +7,8 @@ import time
 from typing import Any
 
 from core import config
+from core.gateway_guard import cloud_guard
+from core.privacy import redact_sensitive_text
 
 
 class LLMRouter:
@@ -15,6 +17,8 @@ class LLMRouter:
         self.last_channel = "local_rule_fallback"
         self.last_latency_ms: float | None = None
         self._gateway_latency_samples: list[float] = []
+        self.last_fallback_reason: str | None = None
+        self.cloud_guard = cloud_guard
 
     @property
     def average_gateway_latency_ms(self) -> float | None:
@@ -25,7 +29,7 @@ class LLMRouter:
     def route_channel(self, force_local_fallback: bool = False) -> str:
         if force_local_fallback:
             return "local_rule_fallback"
-        if config.GATEWAY_BASE_URL and config.GATEWAY_APP_SECRET:
+        if config.gateway_configured():
             return "tencent_gateway"
         if config.DEEPSEEK_BASE_URL and config.DEEPSEEK_API_KEY and not config.DEEPSEEK_API_KEY.startswith("YOUR_"):
             return "primary_llm"
@@ -33,7 +37,7 @@ class LLMRouter:
             return "backup_llm"
         return "local_rule_fallback"
 
-    def _cloud_plan(self, text: str) -> list[dict[str, Any]] | None:
+    def _cloud_plan(self, text: str, user_id: str = "U1001") -> list[dict[str, Any]] | None:
         """Try configured OpenAI-compatible providers; accept only registered tools."""
         providers = [
             # OpenAI SDK appends /chat/completions to this base URL.
@@ -44,14 +48,24 @@ class LLMRouter:
             ("backup_llm", config.RELAY_BASE_URL, config.RELAY_API_KEY,
              config.RELAY_FAST_MODEL, {}),
         ]
+        providers = [
+            provider for provider in providers
+            if provider[1] and provider[2] and not str(provider[2]).startswith("YOUR_")
+        ]
+        if not providers:
+            self.last_fallback_reason = "offline_mode"
+            return None
         try:
             from openai import OpenAI
             from tools.registry import get_openai_tool_schemas
         except ImportError:
             return None
+        allowed, reason = self.cloud_guard.before_call(user_id)
+        if not allowed:
+            self.last_fallback_reason = reason
+            return None
+        saw_response = False
         for channel, base_url, api_key, model, default_headers in providers:
-            if not base_url or not api_key or api_key.startswith("YOUR_"):
-                continue
             try:
                 client = OpenAI(
                     api_key=api_key,
@@ -65,12 +79,13 @@ class LLMRouter:
                     model=model,
                     messages=[
                         {"role": "system", "content": "你是 Easier-banking 的金融业务规划器，只能处理账户交易与查询、账单分析、理财适当性、银行卡安全、自动代扣、专项资金管理、反诈与基础金融通识（利率、存款保险、汇率、通胀、LPR、利息计算）及本系统操作咨询。对无关代码、游戏、娱乐八卦、笑话故事、体育和非金融闲聊，不调用工具并礼貌说明业务边界。只输出 JSON 对象 {steps:[{tool_name,title,arguments}]}；只能选择提供的工具；金额、账户和联系人不明确时不要猜，使用空 steps。转账前先 resolve_contact。不要宣称操作已执行。"},
-                        {"role": "user", "content": text},
+                        {"role": "user", "content": redact_sensitive_text(text)},
                     ],
                     tools=get_openai_tool_schemas(),
                     tool_choice="none",
                     response_format={"type": "json_object"},
                 )
+                saw_response = True
                 elapsed_ms = round((time.perf_counter() - started_at) * 1000, 1)
                 self.last_latency_ms = elapsed_ms
                 if channel == "tencent_gateway":
@@ -109,9 +124,16 @@ class LLMRouter:
                         raise ValueError("模型规划包含无效工具或参数")
                     validated.append({"tool_name": name, "title": str(item.get("title") or name), "arguments": args})
                 self.last_channel = channel
+                self.last_fallback_reason = None
+                self.cloud_guard.record_success(user_id)
                 return validated
             except Exception:
                 continue
+        if saw_response:
+            self.cloud_guard.record_success(user_id)
+            self.last_fallback_reason = "empty_plan"
+        else:
+            self.last_fallback_reason = self.cloud_guard.record_failure(user_id)
         return None
 
     @staticmethod
@@ -127,10 +149,11 @@ class LLMRouter:
         match = re.search(r"(?:给|向)\s*([\u4e00-\u9fff]{2,8})\s*(?:转|汇)", text)
         return match.group(1) if match else ""
 
-    def plan(self, text: str, force_local_fallback: bool = False) -> list[dict[str, Any]]:
+    def plan(self, text: str, force_local_fallback: bool = False, user_id: str = "U1001") -> list[dict[str, Any]]:
         self.last_channel = "local_rule_fallback"
+        self.last_fallback_reason = "forced_local" if force_local_fallback else None
         if not force_local_fallback:
-            cloud_plan = self._cloud_plan(text)
+            cloud_plan = self._cloud_plan(text, user_id=user_id)
             if cloud_plan:
                 return cloud_plan
         msg = text.strip()

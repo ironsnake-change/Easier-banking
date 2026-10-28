@@ -21,6 +21,8 @@
 
 4. 浏览器访问 `http://127.0.0.1:8000`。数据库会在首次启动时自动创建并写入演示数据。
 
+应用会使用 Python 标准库自动读取项目根目录的 `.env`（若存在），进程环境变量优先。可参考 `.env.example`；其默认 `DEMO_MODE=1`，评委克隆后无需申请或配置任何大模型 Key。启动日志会明确打印当前 `demo_mode`、`gateway_mode` 与会话有效期。
+
 演示账户：
 
 - 林砚：`linyan` / `Demo@2026`
@@ -28,13 +30,24 @@
 
 ## 环境变量
 
-- `DEMO_MODE=1`：仅供评测演示。只有该值启用时，提案响应中的 `demo_hint` 才会返回本次一次性验证码。生产环境必须关闭并接入真实短信、语音或验证器通道。
+- `DEMO_MODE=1`：评委演示默认模式。只有该值启用时，提案响应中的 `demo_hint` 才会返回本次一次性验证码，界面显示“演示模式：验证码见提示”。生产环境必须设为 `0` 并接入真实短信、语音或验证器通道。
 - `OTP_PEPPER`：一次性验证码哈希的服务端密钥；生产环境必须显式设置并妥善保管。
 - `ACTION_PROPOSAL_TTL_SECONDS`：授权提案有效期，默认 120 秒。
 - `LIMIT_OVERRIDE_TTL_SECONDS`：临时额度有效期，默认 900 秒。
 - `EASIER_BANKING_GATEWAY_URL`：腾讯云 AI 网关地址。
-- `EASIER_BANKING_GATEWAY_APP_SECRET`：腾讯云 AI 网关应用密钥。
+- `EASIER_BANKING_GATEWAY_APP_SECRET`：可选覆盖评委体验网关密钥；留空或设为 `YOUR_` 开头的占位值时自动进入离线规则模式。
+- `EASIER_BANKING_CLOUD_RATE_LIMIT`：每用户每分钟云端调用上限，默认 20。
+- `EASIER_BANKING_CLOUD_TIMEOUT_SECONDS`：云端单次超时，默认且最高 8 秒。
+- `EASIER_BANKING_CLOUD_FAILURE_THRESHOLD` / `EASIER_BANKING_CLOUD_CIRCUIT_SECONDS`：连续失败阈值与熔断时间，默认 3 次 / 60 秒。
+- `EASIER_BANKING_SESSION_TTL_SECONDS`：登录会话有效期，默认 28800 秒（8 小时）。
+- `EASIER_BANKING_LOGIN_MAX_FAILURES`、`..._FAILURE_WINDOW_SECONDS`、`..._LOCK_SECONDS`：登录连续失败锁定策略，默认 5 次、5 分钟窗口、锁定 5 分钟。
 - `DEEPSEEK_API_KEY`、`RELAY_BASE_URL`、`RELAY_API_KEY`：可选的二级模型通道。
+
+## 网关与隐私
+
+评委体验使用的是部署在腾讯云上海节点的受限凭证，服务端已实施每用户 20 次/分钟限流、8 秒超时与连续失败熔断，仅用于聊天推理，赛后将作废。浏览器不会获得或保存该凭证。
+
+发送给网关的上下文只包含账户状态、交易摘要、联系人和银行卡后四位等办理业务所需信息；手机号、证件号与完整卡号会在服务端脱敏。未配置网关时系统自动使用本地规则引擎，不影响登录、只读查询和受控提案流程。
 
 ## 安全设计
 
@@ -67,13 +80,15 @@ PENDING -> CONFIRMED -> EXECUTED
 - `DEMO_MODE=1` 时，响应中的 `demo_hint` 用于评委演示；其他情况不得返回明文验证码。
 - L3 转账确认成功后写入 `limit_overrides`。有效额度等于用户基础额度加未过期临时额度，基础 `transfer_threshold` 不会被修改；临时额度到期后自动失效。
 - 基础单日限额也不能通过 `/api/preferences` 直接调高；调高限额会生成 `limit_change` 提案，并按 L3 要求验证。
-- 浏览器完全离线时的本地账本只用于演示与容灾，无法替代服务端信任边界；涉及真实资金或生产数据时必须连接已鉴权的后端服务。
+- 后端服务不可达时，浏览器只展示上次同步的只读缓存；不得在浏览器本地生成授权、扣款、转账、锁卡或订阅变更。界面会明确显示“服务暂不可用，操作未执行”。
 
 ### 审计与兼容
 
 - 提案创建、确认、取消、过期、执行以及临时额度创建均写入 SHA-256 审计链。
 - 旧的 `POST /api/assistant/action` 与 `POST /api/assistant/execute` 已返回 HTTP 410。
 - 新流程为 `POST /api/assistant/propose` 与 `POST /api/assistant/confirm`。
+- `/api/system/reset-demo` 与 `/api/security/reset-breaker` 仅在 `DEMO_MODE=1` 可用；重置演示业务数据不会删除审计链，并要求重新登录。
+- 登录会话默认 8 小时过期；同一用户名或 IP 连续 5 次失败后锁定 5 分钟。
 
 请求示例：
 

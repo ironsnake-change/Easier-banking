@@ -49,10 +49,16 @@ def _confirm(client: TestClient, headers: dict[str, str], proposal: dict, otp: s
 def test_deprecated_execution_endpoints_reject_client_confirmation(client):
     headers = _login(client)
     action = {"action": "transfer", "params": {"recipient": "房东陈姐", "amount": 100, "remark": "test"}}
+    before = client.get("/api/state", headers=headers).json()["user_profile"]["available_balance"]
     for path in ("/api/assistant/action", "/api/assistant/execute"):
         response = client.post(path, headers=headers, json={"action": action, "confirmed": True, "temporary_limit_raise": True})
         assert response.status_code == 410
         assert "propose" in response.json()["detail"]
+    after = client.get("/api/state", headers=headers).json()["user_profile"]["available_balance"]
+    assert after == before
+    assert database.fetch_all(
+        "SELECT COUNT(*) AS count FROM action_proposals WHERE user_id='U2001'"
+    )[0]["count"] == 0
     rejected = client.post(
         "/api/assistant/propose",
         headers=headers,

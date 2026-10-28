@@ -6,10 +6,9 @@
   var SESSION_TOKEN = "eb_session";
   var SESSION_LOCAL_ACCOUNT = "eb_local_account_v3";
   var ENGINE_MODE_KEY = "easier_banking_engine_mode_v1";
+  var ELDER_DEMO_NAME = "\u5f20\u5efa\u56fd";
   var VOICE_GENDER_KEY = "easier_banking_voice_gender_v1";
   var DIRECT_KEY = "eb_direct_api_key";
-  var GATEWAY_URL = "https://adverse-turkey-d1gf25ss51ce3e932-1518539214.ap-shanghai.app.tcloudbase.com/chat/completions";
-  var NATIVE_GLM_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
   var DEMO_PASSWORD = "Demo@2026";
   var API_TIMEOUT = 2500;
   var currentTab = "overview";
@@ -258,7 +257,7 @@
     var now = isoNow();
     var isElder = kind === "zhangjg" || (registration && registration.account_type === "elder");
     var isNew = !!registration;
-    var name = registration ? registration.name : (isElder ? "张建国" : "林砚");
+    var name = registration ? registration.name : (isElder ? ELDER_DEMO_NAME : "林砚");
     var username = registration ? registration.username : (isElder ? "zhangjg" : "linyan");
     var userId = registration ? "LOCAL_" + Date.now() : (isElder ? "U1001" : "U2001");
     var tail = registration ? registration.card_tail : (isElder ? "0921" : "8848");
@@ -330,7 +329,7 @@
     var welcome = isNew
       ? "您好，" + name + "。您的数字银行账户已开立，首笔 ¥50,000.00 体验资金已入账。我可以帮您查看收支、配置专项资金口袋并建立安全审计链。"
       : (isElder
-        ? "您好，张叔叔。我可以帮您查看养老金收支、核对「养生堂」自动扣款风险，也可以按您的吩咐给大孙子转账或管理定期存款。"
+        ? "您好，" + name + "。我可以帮您查看养老金收支、核对高危自动扣款风险，也可以按您的吩咐给家人转账或管理定期存款。"
         : "您好，林砚。已为您同步私人银行账户（尾号 8848）及「川西旅行基金」专项口袋。我可以帮您核对本月收支、识别境外异常探测交易，或执行多步资金调拨。");
     var data = {
       user_profile: profile,
@@ -366,7 +365,7 @@
       engine_status: {
         primary: "腾讯云 CloudBase 上海节点直连 (glm-4-flash) [已挂载鉴权]",
         fallback: "三级容灾就绪 (Tencent Gateway → DeepSeek/Relay → Local Rule Fallback)",
-        gateway_base_url: "https://adverse-turkey-d1gf25ss51ce3e932-1518539214.ap-shanghai.app.tcloudbase.com",
+        gateway_base_url: "",
         model: "glm-4-flash", route_channel: "local_rule_fallback", last_latency_ms: 0
       },
       bill_analytics: {}
@@ -425,7 +424,7 @@
     }
     if (forceReset || !localAccounts.zhangjg) {
       localAccounts.zhangjg = {
-        account_id: "zhangjg", username: "zhangjg", name: "张建国", card_tail: "0921",
+        account_id: "zhangjg", username: "zhangjg", name: ELDER_DEMO_NAME, card_tail: "0921",
         account_type: "elder", user_id: "U1001", demo: true,
         state: createLocalState("zhangjg")
       };
@@ -780,15 +779,22 @@
     if (latency != null) engineState.latency = Number(latency);
     engineState.checkedAt = new Date().toISOString();
     var cloud = byId("cloudStatus");
+    var modeBadge = byId("runtimeModeBadge");
     if (cloud) {
       cloud.classList.remove("online", "offline", "checking");
       cloud.classList.add(status === "online" ? "online" : status === "offline" ? "offline" : "checking");
       var label = cloud.querySelector("span");
       if (label) label.textContent = status === "online" ? "云端 AI 链路在线" : status === "offline" ? "本地容灾链路运行中" : "云端 AI 链路检测中";
     }
+    if (modeBadge) {
+      modeBadge.classList.remove("online", "offline", "checking");
+      modeBadge.classList.add(engineState.mode === "cloud" && status === "online" ? "online" : status === "checking" ? "checking" : "offline");
+      var modeCopy = modeBadge.querySelector("span");
+      if (modeCopy) modeCopy.textContent = engineState.mode === "cloud" && status === "online" ? "模式：云端" : status === "checking" ? "模式：检测中" : "模式：离线";
+    }
     safeText("engineLabel", engineState.mode === "local"
-      ? "当前模式: 本地确定性金融引擎"
-      : status === "online" ? "当前模式: 云端 GLM-4-Flash · 实时业务引擎" : "当前模式: 云端连接中 · 本地账本待命");
+      ? "当前模式: 离线只读缓存 · 禁止本地资金操作"
+      : status === "online" ? "当前模式: 云端 GLM-4-Flash · 实时业务引擎" : "当前模式: 离线规则引擎 · 服务恢复前不执行写操作");
     renderEngine();
   }
 
@@ -988,6 +994,7 @@
   }
 
   function makeLocalAuthorization(action, levelInfo) {
+    throw new Error("服务暂不可用，操作未执行。");
     var params = action.params || {};
     var proposalId = "PROP-LOCAL-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).slice(2, 7).toUpperCase();
     var token = randomHex(40);
@@ -1050,37 +1057,29 @@
   async function proposeAction(action, messageId) {
     action = normalizeLocalAction(action);
     if (!action) throw new Error("该业务动作不在许可范围内。");
-    if (state.source === "cloud" && location.protocol !== "file:" && state.token && state.token.indexOf("local-session-") !== 0) {
-      var response = await requestJSON("/api/assistant/propose", {
-        method: "POST",
-        timeout: 10000,
-        body: JSON.stringify({ action: action, message_id: messageId == null ? null : Number(messageId) })
-      });
-      rememberProposal(response.authorization || response.card);
-      if (response.live_state) {
-        state.data = normalizeState(response.live_state);
-        renderAll();
-      }
-      return response;
+    if (state.source !== "cloud" || location.protocol === "file:" || !state.token || state.token.indexOf("local-session-") === 0) {
+      throw new Error("服务暂不可用，操作未执行。");
     }
-    var levelInfo = localActionLevel(action);
-    var authorization = makeLocalAuthorization(action, levelInfo);
-    var secret = proposalSecret(authorization) || {};
-    return {
-      proposal_id: authorization.proposal_id,
-      level: authorization.level,
-      requires: authorization.requires,
-      reasons: authorization.reasons,
-      expires_at: authorization.expires_at,
-      authorization: authorization,
-      demo_hint: secret.otp ? { otp: secret.otp } : null,
-      local: true
-    };
+    var response = await requestJSON("/api/assistant/propose", {
+      method: "POST",
+      timeout: 10000,
+      body: JSON.stringify({ action: action, message_id: messageId == null ? null : Number(messageId) })
+    });
+    rememberProposal(response.authorization || response.card);
+    if (response.live_state) {
+      state.data = normalizeState(response.live_state);
+      renderAll();
+    }
+    return response;
   }
 
   async function confirmProposalAuthorization(authorization, otp) {
     var secret = proposalSecret(authorization);
     if (!secret || !secret.token) throw new Error("确认密钥仅在发起授权的当前会话内有效，请重新发起业务。");
+    if (secret.local) {
+      discardProposal(authorization);
+      throw new Error("服务暂不可用，操作未执行。");
+    }
     if (secret.expiresAt && Date.now() > secret.expiresAt) {
       discardProposal(authorization);
       throw new Error("授权提案已过期，请重新发起。");
@@ -1097,25 +1096,20 @@
         throw new Error("验证码错误。剩余 " + Math.max(0, 3 - secret.attempts) + " 次尝试。");
       }
     }
-    if (!secret.local) {
-      var response = await requestJSON("/api/assistant/confirm", {
-        method: "POST",
-        timeout: 12000,
-        body: JSON.stringify({
-          proposal_id: authorization.proposal_id,
-          confirm_token: secret.token,
-          otp: otp || null,
-          cancel: false
-        })
-      });
-      discardProposal(authorization);
-      if (response.live_state) state.data = normalizeState(response.live_state);
-      renderAll();
-      return response;
-    }
-    var executed = await executeLocalAction(authorization.action, authorization.level);
+    var response = await requestJSON("/api/assistant/confirm", {
+      method: "POST",
+      timeout: 12000,
+      body: JSON.stringify({
+        proposal_id: authorization.proposal_id,
+        confirm_token: secret.token,
+        otp: otp || null,
+        cancel: false
+      })
+    });
     discardProposal(authorization);
-    return { status: "EXECUTED", summary: executed.summary, receiptData: executed.receiptData, local: true };
+    if (response.live_state) state.data = normalizeState(response.live_state);
+    renderAll();
+    return response;
   }
 
   async function cancelProposalAuthorization(authorization) {
@@ -1140,36 +1134,7 @@
   }
 
   function directCloudRequest(message, maxTokens) {
-    var key = sessionGet(DIRECT_KEY);
-    var url = key ? NATIVE_GLM_URL : GATEWAY_URL;
-    var headers = { "Content-Type": "application/json" };
-    if (key) headers.Authorization = "Bearer " + key;
-    else headers["X-App-Secret"] = "bank2026test";
-    var started = performance.now();
-    var controller = new AbortController();
-    var timer = setTimeout(function () { controller.abort(); }, 12000);
-    return fetch(url, {
-      method: "POST",
-      headers: headers,
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: "glm-4-flash",
-        messages: [
-          { role: "system", content: bankingSystemPrompt() + "\n当前账户上下文（只读）：" + compactAccountContext() },
-          { role: "user", content: message }
-        ],
-        temperature: 0.15,
-        max_tokens: maxTokens || 650
-      })
-    }).then(function (response) {
-      return response.text().then(function (text) {
-        if (!response.ok) throw new Error("云端网关返回 " + response.status);
-        var payload = JSON.parse(text);
-        var content = payload.choices && payload.choices[0] && payload.choices[0].message ? payload.choices[0].message.content : "";
-        if (!content) throw new Error("云端模型未返回有效内容");
-        return { content: content, latency: Math.round(performance.now() - started), channel: key ? "native_glm" : "tencent_gateway" };
-      });
-    }).finally(function () { clearTimeout(timer); });
+    return Promise.reject(new Error("服务暂不可用，操作未执行。"));
   }
 
   async function probeEngine() {
@@ -1186,10 +1151,7 @@
           if (!isTransport(error)) throw error;
         }
       }
-      if (!result || result.status !== "ONLINE") {
-        var direct = await directCloudRequest("只回复 ONLINE", 8);
-        result = { status: "ONLINE", channel: direct.channel, latency_ms: direct.latency, model: "glm-4-flash" };
-      }
+      if (!result || result.status !== "ONLINE") throw new Error("服务暂不可用，操作未执行");
       var latency = Number(result.latency_ms || Math.round(performance.now() - started));
       setCloudStatus("online", result.channel || "tencent_gateway", latency);
       safeText("probeResult", "腾讯云上海节点 · " + latency + "ms · ONLINE");
@@ -1465,7 +1427,7 @@
     var data = state.data || {};
     var profile = data.user_profile || {};
     if (data.greeting) return data.greeting;
-    if (profile.account_type === "elder") return "您好，张叔叔。我可以帮您查看养老金收支、核对高危自动扣款风险，也可以按您的吩咐给大孙子转账或管理定期存款。";
+    if (profile.account_type === "elder") return "您好，" + (profile.name || "您好") + "。我可以帮您查看养老金收支、核对高危自动扣款风险，也可以按您的吩咐给家人转账或管理定期存款。";
     return "您好，" + (profile.name || "储户") + "。已同步您的账户与专项资金口袋，我可以帮您核对收支、排查异常交易或执行安全转账。";
   }
 
@@ -1490,7 +1452,7 @@
     if (authorization.status === "PENDING") {
       if (requiresOtp) {
         html += '<label class="otp-field"><span>一次性验证码</span><input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" data-otp-input="' + index + '" placeholder="6 位验证码">' +
-          (secret && secret.demoHint && secret.demoHint.otp ? '<small>演示验证码：' + esc(secret.demoHint.otp) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>';
+          (secret && secret.demoHint && secret.demoHint.otp ? '<small>演示模式：验证码见提示 · ' + esc(secret.demoHint.otp) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>';
       }
       html += '<div class="auth-card-actions"><button class="auth-approve" type="button" data-auth-approve="' + index + '"' + (!secret ? " disabled" : "") + '>' + (requiresOtp ? "验证并执行" : "确认授权并执行") + '</button><button class="auth-cancel" type="button" data-auth-cancel="' + index + '"' + (!secret ? " disabled" : "") + '>✕ 取消</button></div>';
       if (!secret) html += '<div class="auth-card-result" style="color:var(--amber)">确认密钥只在发起授权后的 120 秒内有效，请重新发起此操作。</div>';
@@ -1571,8 +1533,10 @@
       var receipt = receiptForMessage(message);
       var display = parseBankAction(message.content).text || message.content;
       var compliance = message.receipt && (message.receipt.compliance_rejected || message.receipt.compliance_badge);
+      var offlineReadOnly = message.receipt && message.receipt.offline_read_only;
       var badge = receipt ? '<button class="receipt-badge" type="button" data-receipt-id="' + esc(receipt.receipt_id) + '">🧾 已生成电子回单 #' + esc(receipt.receipt_id) + '</button>' : "";
       if (compliance) badge += '<span class="compliance-badge">🛡️ 业务合规边界提示</span>';
+      if (offlineReadOnly) badge += '<span class="compliance-badge">离线只读缓存 · 未执行资金操作</span>';
       var menu = isUser ? "" : '<div class="message-tools"><button class="more-button" type="button" aria-label="消息操作">⋯</button><div class="message-menu"><button type="button" data-message-action="copy" data-message-index="' + index + '">📋 复制</button><button type="button" data-message-action="speak" data-message-index="' + index + '">🔊 朗读</button>' + (receipt ? '<button type="button" data-message-action="receipt" data-message-index="' + index + '">🧾 追溯回单</button>' : '') + '</div></div>';
       return '<article class="message-row ' + (isUser ? "user" : "assistant") + '" data-message-row="' + index + '"><div class="message-bubble"><div class="message-text">' + esc(display) + '</div>' + (isUser ? "" : miniSummaryPills(message)) + '</div>' + (isUser ? "" : renderClarificationOptions(message, index)) + (isUser ? "" : renderAuthorizationCard(message, index)) + '<div class="message-meta"><span>Easier-banking · ' + esc(formatMessageTime(message.created_at)) + '</span>' + badge + '</div>' + menu + '</article>';
     }).join("");
@@ -1640,8 +1604,8 @@
     document.body.classList.toggle("elder", !!profile.elderly_mode);
     safeText("elderToggleTop", "长辈关怀: " + (profile.elderly_mode ? "开" : "关"));
     safeText("engineLabel", engineState.mode === "local"
-      ? "当前模式: 本地确定性金融引擎"
-      : engineState.status === "online" ? "当前模式: 云端 GLM-4-Flash · 实时业务引擎" : "当前模式: 云端连接中 · 本地账本待命");
+      ? "当前模式: 离线只读缓存 · 禁止本地资金操作"
+      : engineState.status === "online" ? "当前模式: 云端 GLM-4-Flash · 实时业务引擎" : "当前模式: 离线规则引擎 · 服务恢复前不执行写操作");
   }
 
   function renderQuickActions() {
@@ -2022,7 +1986,7 @@
       esc(actionLabel(action.action)) + ' · ' + esc(authorization.target || action.params.recipient || action.params.service_name || action.params.name || action.params.card_tail || "当前账户") +
       '<br>授权有效期至 ' + esc(String(proposal.expires_at || authorization.expires_at || "").replace("T", " ").slice(0, 19)) + '</small></div>' +
       '<div class="proposal-reasons">' + reasons.map(function (reason) { return '<span>' + esc(reason) + '</span>'; }).join("") + '</div>' +
-      (requiresOtp ? '<label class="otp-field"><span>一次性验证码</span><input id="modalOtp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码">' + (hint ? '<small>演示验证码：' + esc(hint) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>' : "") +
+      (requiresOtp ? '<label class="otp-field"><span>一次性验证码</span><input id="modalOtp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码">' + (hint ? '<small>演示模式：验证码见提示 · ' + esc(hint) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>' : "") +
       '<div id="proposalModalError" class="inline-error"></div>';
   }
 
@@ -2184,13 +2148,13 @@
     });
     safeText("enginePrimary", cloud
       ? "腾讯云 CloudBase 上海节点 · glm-4-flash"
-      : "本地确定性金融引擎 · Deterministic Ledger");
+      : "离线只读缓存 · 服务恢复前不执行资金操作");
     safeText("engineMonitor", !cloud
-      ? "当前强制使用本地语义引擎，所有资金动作仍经过 L1/L2/L3 授权与 SHA-256 审计。"
+      ? "当前仅展示上次同步的只读缓存。服务恢复前禁止在浏览器本地生成授权或变更资金。"
       : engineState.status === "online"
         ? "云端真实推理已激活。通道：" + (engineState.channel === "native_glm" ? "智谱原生备用直连" : engineState.channel === "browser_direct" ? "浏览器跨域直连" : "腾讯云安全网关") + "。模型只输出受控 bank_action，执行前由本地授权卡确认。"
         : engineState.status === "offline"
-          ? "云端暂不可达，已静默切换本地语义引擎；下一次探测会继续尝试云端主通道。"
+          ? "云端暂不可达，服务端规则引擎仍在授权边界内工作；浏览器仅展示只读缓存。"
           : "正在建立 AI 安全链路，登录后自动探测腾讯云上海节点。"
     );
     safeText("engineFallback", "三级容灾就绪 (" + (engine.route_channel === "local_semantic" ? "Local Semantic" : "Tencent Gateway → Direct GLM → Local Semantic") + ")");
@@ -2202,7 +2166,14 @@
       cloudPill.classList.remove("online", "offline", "checking");
       cloudPill.classList.add(!cloud || engineState.status === "offline" ? "offline" : engineState.status === "online" ? "online" : "checking");
       var copy = cloudPill.querySelector("span");
-      if (copy) copy.textContent = !cloud ? "本地 AI 引擎模式" : engineState.status === "online" ? "云端 AI 链路在线" : engineState.status === "offline" ? "本地容灾链路运行中" : "云端 AI 链路检测中";
+      if (copy) copy.textContent = !cloud ? "离线只读模式" : engineState.status === "online" ? "云端 AI 链路在线" : engineState.status === "offline" ? "离线规则引擎运行中" : "云端 AI 链路检测中";
+    }
+    var modeBadge = byId("runtimeModeBadge");
+    if (modeBadge) {
+      modeBadge.classList.remove("online", "offline", "checking");
+      modeBadge.classList.add(cloud && engineState.status === "online" ? "online" : engineState.status === "checking" ? "checking" : "offline");
+      var modeCopy = modeBadge.querySelector("span");
+      if (modeCopy) modeCopy.textContent = cloud && engineState.status === "online" ? "模式：云端" : engineState.status === "checking" ? "模式：检测中" : "模式：离线";
     }
   }
 
@@ -2392,7 +2363,7 @@
     renderEngine();
     if (engineState.mode === "cloud") probeEngine();
     else safeText("probeResult", "已强制启用本地确定性引擎");
-    toast(engineState.mode === "cloud" ? "已启用云端大模型实时推理。" : "已切换至本地确定性金融引擎。");
+    toast(engineState.mode === "cloud" ? "已启用云端大模型实时推理。" : "已切换至离线只读缓存，资金与授权操作不会在浏览器执行。");
   }
 
   function toggleElder(force) {
@@ -2462,7 +2433,7 @@
     var text = String(message.content || "");
     var profile = profileData(), analytics = state.data && state.data.bill_analytics ? state.data.bill_analytics : {};
     var elder = profile.account_type === "elder";
-    var salutation = elder ? "张叔叔" : (profile.name || "您好") + "您好";
+    var salutation = profile.name || "您好";
     var categories = ensureArray(analytics.category_breakdown).slice(0, 2).map(function (item) { return item.category; }).filter(Boolean).join("和");
     var remaining = Math.max(0, Number(prefsData().transfer_threshold || profile.daily_transfer_limit || 1000) - Number(profile.daily_transfer_used || 0));
     if (/近六个月|收支|账单|总支出|收入.*支出/.test(text)) {
@@ -2479,7 +2450,7 @@
     if (/订阅|代扣|自动续费/.test(text)) {
       var active = ensureArray(state.data.subscriptions).filter(function (item) { return String(item.status).toUpperCase() === "ACTIVE"; });
       var monthly = active.reduce(function (sum, item) { return sum + Number(item.amount || 0); }, 0);
-      return (elder ? "张叔叔，我已经帮您核对过了。" : (profile.name || "您好") + "，为您核对完成。") + "目前有 " + active.length +
+      return salutation + "，我已经帮您核对过了。目前有 " + active.length +
         " 项自动扣款，每月合计 " + money(monthly) + "。" + (elder ? "如果哪一项用不上，我可以帮您关掉。" : "需要解除哪一项授权，请直接告诉我。");
     }
     var sentences = String(text).split(/(?<=[。；])/).filter(Boolean).slice(0, 2).join("");
@@ -2661,6 +2632,7 @@
   }
 
   async function performLocalTransfer(amount, recipient, text) {
+    throw new Error("服务暂不可用，操作未执行。");
     var data = state.data, profile = profileData();
     if (!amount || amount <= 0) return { reply: "请告诉我转账金额，我会先为您核对收款关系与今日安全限额。" };
     if (amount > Number(profile.available_balance || 0)) return { reply: "当前活期可用余额不足以完成这笔转账，请调整金额或先赎回理财产品。" };
@@ -2687,6 +2659,7 @@
   }
 
   async function performFundLock(amount) {
+    throw new Error("服务暂不可用，操作未执行。");
     var data = state.data, profile = profileData();
     if (!amount || amount <= 0) return { reply: "请告诉我需要划入专项资金口袋的金额。" };
     if (amount > Number(profile.available_balance || 0)) return { reply: "当前可用余额不足，暂时无法完成专项口袋划拨。" };
@@ -2721,6 +2694,7 @@
   }
 
   async function performSubscriptionCancel(subId, authorizationComplete) {
+    throw new Error("服务暂不可用，操作未执行。");
     var data = state.data;
     var subscription = data.subscriptions.find(function (item) { return String(item.sub_id) === String(subId); });
     if (!subscription) return { reply: "未找到对应的自动代扣协议。" };
@@ -2749,6 +2723,7 @@
   }
 
   async function executeLocalAction(action, level) {
+    throw new Error("服务暂不可用，操作未执行。");
     var data = state.data, profile = profileData(), params = action.params || {};
     var amount = Number(params.amount || (params.operation === "adjust_limit" ? params.value : 0) || 0);
     var summary = "", receipt = null, resultData = {};
@@ -2924,7 +2899,7 @@
     var lower = String(text || "");
     if (/笑话|游戏攻略|写代码|Python|C\+\+|体育比赛|娱乐八卦|讲个故事|写诗/.test(lower)) {
       var refusal = profileData().account_type === "elder"
-        ? "张叔叔，实在不好意思呀，我是专门帮您管钱、查账和防诈骗的银行小助手，这个跟账户和金融没关系的问题按规定不能回答。您看要不要先核对一下养老金收支？"
+        ? (profileData().name || "您好") + "，实在不好意思呀，我是专门帮您管钱、查账和防诈骗的银行小助手，这个跟账户和金融没关系的问题按规定不能回答。您看要不要先核对一下养老金收支？"
         : "抱歉，我是您的私人金融助理。受银行安全与合规准则限制，我仅支持办理账户交易、财务分析及解答金融通识问题，暂无法处理与金融业务无关的请求。";
       addLocalMessage("assistant", refusal);
       renderAll();
@@ -2936,21 +2911,14 @@
       renderAll();
       return { reply: guard };
     }
-    var queryOnly = /检查|查询|查看|多少钱|明细|分析|是什么|如何|怎么|核对/.test(lower) &&
-      !/退订|取消|关掉|订阅|开通|转账|转给|冻结|止付|锁定|限额|存入|取出|赎回/.test(lower);
-    var action = queryOnly ? null : normalizeLocalAction(inferLocalAction(lower));
-    if (action) {
-      var info = localActionLevel(action);
-      var pending = makeLocalAuthorization(action, info);
-      var params = action.params || {};
-      var prompt = action.action === "cancel_subscription"
-        ? "已定位到「" + params.service_name + "」自动续费协议，完成确认后才会解除授权。"
-        : action.action === "subscribe_service"
-          ? "已识别「" + params.service_name + "」付费订阅，月费 " + money(params.amount) + "。完成授权后才会扣款并创建协议。"
-          : action.action === "transfer"
-            ? (info.level === "L3" ? "本次转账 " + money(params.amount) + " 超过今日剩余额度 " + money(info.remaining) + "，确认并验证无误后才会临时提额执行。" : "已识别转账 " + money(params.amount) + " 至 " + params.recipient + "，确认前不会扣款。")
-            : "已识别" + actionLabel(action.action) + "指令，涉及金额 " + money(params.amount || params.value || 0) + "。请核对下方授权卡。";
-      addLocalMessage("assistant", prompt + "\n确认卡仅在当前会话内有效，账务尚未变更。", { authorization: pending });
+    var readOnly = /查询|查看|看一下|检查|核对|余额|账单|流水|收支|消费|订阅|代扣|异常|盗刷|额度|持仓|收益|状态|多少|情况|是否|有没有|明细|记录|趋势|怎么|如何/.test(lower) &&
+      !/退订|取消订阅|终止代扣|关闭自动续费|转账|转给|给我转|冻结|解冻|止付|锁定|限额|开通|订购|申购|赎回|存入|取出|划入|新建|创建/.test(lower);
+    if (!readOnly) {
+      addLocalMessage(
+        "assistant",
+        "服务暂不可用，操作未执行。当前处于离线只读模式，不能生成授权、变更资金或修改银行卡与订阅状态。",
+        { offline_read_only: true, service_unavailable: true }
+      );
     } else {
       var reply = localPreciseReply(lower);
       if (!reply && /养老金|收支|账单|流水|花了|消费/.test(lower)) {
@@ -2961,8 +2929,8 @@
       if (!reply && /安全|风险|审计|哈希/.test(lower)) {
         reply = "当前风险控制评分为 98 / 100，连续验证失败 " + Number(state.data.security_status.consecutive_failures || 0) + " 次。账户级 SHA-256 审计链包含 " + ensureArray(state.data.security_status.audit_chain).length + " 个区块，全链完整性可通过校验。";
       }
-      if (!reply) reply = "已核验当前账户与风控上下文。您可以让我分析账单、管理代扣、创建专项资金口袋、配置银行卡安全锁或发起受控转账。";
-      addLocalMessage("assistant", reply);
+      if (!reply) reply = "当前仅显示上次同步的账户摘要；详细数据需要服务恢复后重新核验。";
+      addLocalMessage("assistant", "【离线只读缓存】" + reply, { offline_read_only: true, cached_at: isoNow() });
     }
     computeAnalytics(state.data);
     saveCurrentLocal();
@@ -3097,37 +3065,21 @@
             toast(friendlyError(error));
             return;
           }
-          toast("后端代理暂不可用，正在切换浏览器云端直连通道。");
+          throw error;
         }
       }
-      var cloud = await directCloudRequest(text);
-      var parsed = parseBankAction(cloud.content);
-      var queryOnly = /检查|查询|查看|多少钱|明细|分析|是什么|如何|怎么/.test(text) &&
-        !/退订|取消|关掉|订阅|开通|转账|转给|冻结|止付|锁定|限额|存入|取出|赎回/.test(text);
-      var action = queryOnly ? null : normalizeLocalAction(parsed.action || inferLocalAction(text));
-      var visible = parsed.text || "已根据当前账户上下文完成核验。";
-      var precise = queryOnly ? localPreciseReply(text) : "";
-      if (precise) visible = precise;
-      setCloudStatus("online", cloud.channel, cloud.latency);
-      if (action) {
-        var info = localActionLevel(action);
-        var pending = makeLocalAuthorization(action, info);
-        appendAssistantMessage(visible + "\n确认卡仅在当前会话内有效，账务尚未变更。", { authorization: pending });
-      } else {
-        appendAssistantMessage(visible, {});
-      }
-      computeAnalytics(state.data);
-      saveCurrentLocal();
-      typing = false;
-      renderAll();
-      tone();
-      if (prefsData().auto_read && visible) speak(visible);
+      throw new Error("服务暂不可用，操作未执行。");
     } catch (error) {
       typing = false;
-      renderChat();
       setCloudStatus("offline", "local_semantic", null);
-      toast("云端实时推理暂不可达，已无感切换本地确定性引擎。");
-      await localAgentReply(text, true);
+      appendAssistantMessage(
+        "服务暂不可用，操作未执行。当前仅可查看上次同步的只读缓存，任何资金或授权操作都必须等待服务恢复。",
+        { offline_read_only: true, service_unavailable: true }
+      );
+      computeAnalytics(state.data);
+      saveCurrentLocal();
+      renderAll();
+      toast("服务暂不可用，操作未执行。");
     } finally {
       typing = false;
       if (send) send.disabled = false;
@@ -3148,8 +3100,7 @@
     );
     if (!confirmed) return;
     if (state.source === "local" || location.protocol === "file:") {
-      var result = await performSubscriptionCancel(subId, true);
-      if (result.receipt) openReceipt(result.receipt);
+      toast("服务暂不可用，操作未执行。代扣协议保持不变。");
       return;
     }
     try {
@@ -3172,9 +3123,7 @@
       }
     } catch (error) {
       if (isTransport(error)) {
-        state.source = "local";
-        var fallback = await performSubscriptionCancel(subId);
-        if (fallback.receipt) openReceipt(fallback.receipt);
+        toast("服务暂不可用，操作未执行。代扣协议保持不变。");
       } else toast(friendlyError(error));
     }
   }
@@ -3326,7 +3275,7 @@
         setSpeechButtonState(button, true);
         var elder = profileData().account_type === "elder";
         var sample = elder
-          ? "张叔叔您好，我是您的专属金融管家。您的养老金账户一切正常，如果有不熟悉的自动扣款，我会及时提醒您。"
+          ? (profileData().name || "您好") + "，我是您的专属金融管家。您的养老金账户一切正常，如果有不熟悉的自动扣款，我会及时提醒您。"
           : "林砚您好，我是您的首席金融管家。尾号 8848 的账户余额为 128450元，重要操作我会先请您确认。";
         speak(sample, { rate: elder ? 0.92 : 0.98, keepButton: true }).then(function () {
           if (activeSpeechButton === button) clearActiveSpeechButton();
