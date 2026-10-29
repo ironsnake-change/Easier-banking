@@ -280,6 +280,7 @@ class ConfirmSubscriptionCancellationRequest(BaseModel):
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     elder_mode: bool | None = None
+    force_local_fallback: bool = False
 
 
 class HumanHandoverRequest(BaseModel):
@@ -504,12 +505,45 @@ def _tts_summary(user_id: str, reply: str, action: dict[str, Any] | None = None,
     return salutation + "，" + concise if concise else salutation + "，业务已经核对完成。"
 
 
+def _is_multi_step_dag_request(message: str) -> bool:
+    """Route explicit cross-scene money-movement requests into the real DAG engine."""
+    text = str(message or "")
+    lock_requested = "锁定" in text or "冻结" in text or bool(
+        re.search(r"锁(?:住|上|定)?\s*(?:\d|[一二两三四五六七八九十百千万])", text)
+    )
+    order_requested = any(word in text for word in ("订单", "预订", "机票", "鲜花", "蛋糕", "旅游"))
+    return lock_requested and order_requested
+
+
 @app.post("/api/assistant/chat")
 def assistant_chat(request: AssistantChatRequest, x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
     user_id = _session_user(x_session_token)
     preferences = workspace.get_preferences(user_id)
     elder_mode = bool(preferences.get("elder_mode", 0)) if request.elder_mode is None else request.elder_mode
     workspace.append_chat_message(user_id, "user", request.message)
+    if _is_multi_step_dag_request(request.message):
+        # Cross-scene money movement uses the deterministic planner so a cloud
+        # model variance can never silently drop or reorder a financial step.
+        result = banking_agent.chat(
+            request.message,
+            user_id=user_id,
+            elder_mode=elder_mode,
+            force_local_fallback=True,
+        )
+        reply = result.get("reply_text") or "跨场景任务已生成。"
+        message_id = workspace.append_chat_message(
+            user_id,
+            "assistant",
+            reply,
+            {"dag": result.get("dag", {}), "ttsText": reply},
+        )
+        return {
+            **result,
+            "message_id": message_id,
+            "authorization": None,
+            "receiptData": None,
+            "live_state": build_live_state(user_id),
+        }
     result = ai_banking_assistant.chat(request.message, user_id, elder_mode)
     action = result.get("bank_action")
     authorization = None

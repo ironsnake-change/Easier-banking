@@ -138,7 +138,9 @@ class LLMRouter:
 
     @staticmethod
     def _amount(text: str, default: float | None = None) -> float | None:
-        match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*(?:元|块)?", text)
+        match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*(?:元|块)", text)
+        if not match:
+            match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)", text)
         return float(match.group(1).replace(",", "")) if match else default
 
     @staticmethod
@@ -163,14 +165,28 @@ class LLMRouter:
 
         amount = self._amount(msg)
         # High-value composite scenarios have explicit ordering and arguments.
-        if "锁定" in msg and "订单" in msg and amount is not None:
-            values = [float(x.replace(",", "")) for x in re.findall(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*元?", msg)]
+        lock_requested = "锁定" in msg or "冻结" in msg or bool(
+            re.search(r"锁(?:住|上|定)?\s*(?:\d|[一二两三四五六七八九十百千万])", msg)
+        )
+        order_requested = any(word in msg for word in ("订单", "预订", "机票", "鲜花", "蛋糕"))
+        if lock_requested and order_requested and amount is not None:
+            values = [
+                float(x.replace(",", ""))
+                for x in re.findall(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*(?:元|块)", msg)
+            ]
             lock_amount = values[0] if values else amount
             order_amount = values[1] if len(values) > 1 else lock_amount
             add("query_cards_status", "查询银行卡状态")
-            add("lock_demand_funds", "锁定专项资金", {"amount": lock_amount, "purpose": "三亚旅游专项资金"})
-            title = "三亚机票酒店生活服务订单" if "三亚" in msg else "生活服务订单"
-            add("create_lifestyle_order", "创建生活服务订单", {"service_type": "旅游康养", "title": title, "amount": order_amount, "use_locked_funds": True})
+            birthday = "生日" in msg or "爱人" in msg or "老婆" in msg
+            purpose = "爱人生日专项资金" if birthday else "三亚旅游专项资金" if "三亚" in msg else "旅游专项资金"
+            add("lock_demand_funds", "锁定专项资金", {"amount": lock_amount, "purpose": purpose})
+            if birthday and any(word in msg for word in ("鲜花", "蛋糕", "生日")):
+                title, service_type = "生日鲜花蛋糕预订", "生日礼赠"
+            elif "三亚" in msg:
+                title, service_type = "三亚机票酒店预订", "旅游康养"
+            else:
+                title, service_type = "跨场景生活服务预订", "生活服务"
+            add("create_lifestyle_order", "创建生活服务订单", {"service_type": service_type, "title": title, "amount": order_amount, "use_locked_funds": True})
             return nodes
         if "异常交易" in msg or "盗刷" in msg or "异常消费" in msg:
             add("detect_abnormal_transactions", "检查异常交易")

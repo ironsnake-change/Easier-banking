@@ -228,6 +228,10 @@ class BankingAgent:
                 return self._response(task, "CLARIFICATION_NEEDED", resolved.get("summary", "请确认收款人。"), elder_mode)
             plans[1]["arguments"]["payee_id_or_account"] = contacts[0].get("contact_id") or contacts[0].get("name")
         nodes = [DAGNode(f"S{i+1}", p["title"], p["tool_name"], p["arguments"], [f"S{i}"] if i else []) for i,p in enumerate(plans)]
+        for node in nodes:
+            node.risk_level = registry.evaluate_tool_risk(
+                node.tool_name, node.arguments, user_id
+            ).get("risk_level", "GREEN")
         task = DAGTask(dag_id, user_id, user_message, nodes)
         with _LOCK:
             _TASKS[dag_id] = task
@@ -251,6 +255,12 @@ class BankingAgent:
             return self._response(task, "COMPLETED", rejected.get("summary", "已取消本次操作。"), elder_mode)
         outcome = self.gateway.approve_pending_action(pending_action_id, "CONFIRM", sms_code, user_id=user_id)
         if outcome.get("status") != "success":
+            if outcome.get("gate_status") == "MFA_VERIFICATION_FAILED" and not outcome.get("remaining_attempts", 1):
+                node.status = "FAILED"
+                task.pending_step_id = None
+                task.overall_status = "BLOCKED_BY_SECURITY"
+                _persist(task)
+                return self._response(task, "BLOCKED_BY_SECURITY", outcome.get("summary", "验证已作废。"), elder_mode)
             return self._response(task, "PAUSED_FOR_MFA" if node.risk_level == "RED" else "PAUSED_FOR_CONFIRM",
                                   outcome.get("summary", "验证尚未通过，请重试。"), elder_mode,
                                   {"pending_action_id": pending_action_id, "dag_id": dag_id, "step_id": node.step_id,

@@ -2621,6 +2621,27 @@
     ].forEach(function (text, index) { setSagaNode(index + 1, "done", text); });
   }
 
+  function renderDagState(dag) {
+    if (!dag || !Array.isArray(dag.nodes) || !dag.nodes.length) return;
+    var classFor = function (status) {
+      var value = String(status || "").toUpperCase();
+      if (value === "COMPLETED") return "done";
+      if (["ROLLED_BACK", "ABORTED", "FAILED"].indexOf(value) >= 0) return "rolledback";
+      if (["RUNNING", "WAITING_CONFIRM", "WAITING_MFA", "PAUSED_FOR_CONFIRM", "PAUSED_FOR_MFA"].indexOf(value) >= 0) return "running";
+      return "compensating";
+    };
+    dag.nodes.slice(0, 3).forEach(function (node, index) {
+      setSagaNode(
+        index + 1,
+        classFor(node.status),
+        (node.title || node.tool_name || "DAG 节点") + " · " + String(node.status || "PENDING")
+      );
+    });
+    var overall = String(dag.overall_status || "RUNNING").toUpperCase();
+    var finalClass = overall === "COMPLETED" ? "done" : overall === "ROLLED_BACK" ? "compensating" : classFor(overall);
+    setSagaNode(4, finalClass, overall === "ROLLED_BACK" ? "逆向补偿完成 · 账本一致性已恢复" : "账本状态 · " + overall);
+  }
+
   async function animateSaga(rollback) {
     resetSaga();
     var labels = ["参数与风控预审完成", "资金节点已预留", "外部接口连接中", "账本提交与凭证落盘"];
@@ -3012,19 +3033,37 @@
   async function handlePending(response) {
     var pending = response && response.pending_interaction;
     if (!pending) return;
+    if (!pending.demo_hint && state.pending && state.pending.pending_action_id === pending.pending_action_id) {
+      pending.demo_hint = state.pending.demo_hint;
+    }
     state.pending = pending;
+    var pendingArgs = pending.arguments || {};
+    var pendingAmount = Number(pendingArgs.amount || pendingArgs.total_amount || 0);
+    var pendingTarget = pendingArgs.payee_id_or_account || pendingArgs.title || pendingArgs.service_type || pendingArgs.purpose || "专项资金任务";
+    var otpField = pending.risk_level === "RED"
+      ? '<label class="otp-field"><span>一次性验证码</span><input id="dagOtp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码">' + (pending.demo_hint && pending.demo_hint.otp ? '<small>演示模式：验证码见提示 · ' + esc(pending.demo_hint.otp) + '</small>' : '<small>请通过银行验证渠道获取</small>') + '</label>'
+      : "";
     var confirmed = await confirmAction(
       pending.risk_level === "RED" ? "红色强验证 · 继续执行" : "黄色确认 · 核对交易指令",
       pending.confirmation_prompt || pending.risk_reason || "该操作需要您的二次确认。",
-      '<div class="confirm-summary"><span class="dialog-kicker">待授权交易</span><strong>' + money(pending.amount || 0) + '</strong><small>' + esc(pending.summary || pending.risk_reason || "系统已完成前置风控扫描，确认后将提交事务节点。") + '</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">DAG 节点授权</span><strong>' + money(pendingAmount) + '</strong><small>' + esc(pending.tool_name || "受控任务") + ' · ' + esc(pendingTarget) + '<br>' + esc(pending.risk_reason || "系统已完成前置风控扫描，确认后将提交事务节点。") + '</small></div>' + otpField,
       pending.risk_level === "RED" ? "完成强验证" : "确认执行"
     );
     if (!confirmed) {
       try {
-        await requestJSON("/api/dag/rollback", { method: "POST", body: JSON.stringify({ dag_id: pending.dag_id, reason: "用户在安全确认中取消" }) });
+        var rollback = await requestJSON("/api/dag/rollback", { method: "POST", body: JSON.stringify({ dag_id: pending.dag_id, reason: "用户在安全确认中取消" }) });
+        if (rollback.dag) renderDagState(rollback.dag);
         refreshCloudState(true);
       } catch (error) { toast("操作已取消，未产生资金变动。"); }
       return;
+    }
+    var smsCode = null;
+    if (pending.risk_level === "RED") {
+      smsCode = byId("dagOtp") ? byId("dagOtp").value.trim() : "";
+      if (!/^\d{6}$/.test(smsCode)) {
+        toast("请输入有效的 6 位一次性验证码。");
+        return;
+      }
     }
     try {
       var result = await requestJSON("/api/dag/resume", {
@@ -3033,14 +3072,20 @@
           dag_id: pending.dag_id,
           pending_action_id: pending.pending_action_id,
           action: "approve",
-          sms_code: pending.risk_level === "RED" ? (pending.demo_hint && pending.demo_hint.otp) || null : null
+          sms_code: smsCode
         })
       });
+      if (result.dag) renderDagState(result.dag);
       if (result.live_state) state.data = normalizeState(result.live_state);
       renderAll();
       tone();
-      toast(result.reply_text || "交易授权完成，账本已安全提交。");
-      if (result.receiptData) openReceipt(result.receiptData);
+      if (result.pending_interaction) {
+        toast(result.reply_text || "当前节点已处理，请确认下一节点。");
+        await handlePending(result);
+      } else {
+        toast(result.reply_text || "交易授权完成，账本已安全提交。");
+        if (result.receiptData) openReceipt(result.receiptData);
+      }
     } catch (error) {
       toast("安全确认已提交，但云端返回延迟；账本状态暂未变更。");
       refreshCloudState(true);
@@ -3118,11 +3163,16 @@
           });
           typing = false;
           if (response.authorization) rememberProposal(response.authorization);
+          if (response.dag) renderDagState(response.dag);
           if (response.live_state) state.data = normalizeState(response.live_state);
           if (response.route_channel === "tencent_gateway") setCloudStatus("online", "tencent_gateway", response.latency_ms);
           else if (response.route_channel === "local_semantic") setCloudStatus("offline", "local_semantic", null);
           renderAll();
           tone();
+          if (response.pending_interaction) {
+            await handlePending(response);
+            return;
+          }
           if (response.compliance_rejected) toast("该请求超出银行业务与金融通识边界，已按合规准则拒答。");
           var last = ensureArray(state.data.chat_messages).slice(-1)[0];
           if (prefsData().auto_read && last && last.role === "assistant") speak(messageSpeechText(last));

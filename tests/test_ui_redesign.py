@@ -184,6 +184,15 @@ def test_human_handover_is_exposed_without_changing_existing_controls():
     assert "/api/support/handover" in APP
 
 
+def test_main_chat_is_wired_to_dag_confirmation_and_rollback():
+    assert "response.pending_interaction" in APP
+    assert "await handlePending(response)" in APP
+    assert '"/api/dag/resume"' in APP
+    assert '"/api/dag/rollback"' in APP
+    assert "renderDagState(response.dag)" in APP
+    assert "renderDagState(result.dag)" in APP
+
+
 def _png_dimensions(path: Path) -> tuple[int, int]:
     payload = path.read_bytes()
     assert payload[:8] == b"\x89PNG\r\n\x1a\n"
