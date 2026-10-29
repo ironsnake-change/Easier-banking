@@ -1203,6 +1203,33 @@
     }
   }
 
+  async function requestHumanHandover() {
+    if (!state.data) return;
+    if (state.source !== "cloud" || location.protocol === "file:") {
+      toast("服务暂不可用，无法提交人工接管工单。");
+      return;
+    }
+    var button = byId("humanHandover");
+    if (button) button.disabled = true;
+    try {
+      var result = await requestJSON("/api/support/handover", {
+        method: "POST",
+        timeout: 8000,
+        body: JSON.stringify({ reason: "用户在工作台主动请求人工客服接管" })
+      });
+      appendAssistantMessage(
+        result.summary + " 工单号：" + result.ticket_id + "。请勿继续向陌生人转账或提供验证码。",
+        { support_ticket: result.ticket_id }
+      );
+      renderAll();
+      toast("人工工单已建立：" + result.ticket_id);
+    } catch (error) {
+      toast(friendlyError(error));
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function activateCloudProbe() {
     engineState.mode = "cloud";
     try { localStorage.setItem(ENGINE_MODE_KEY, "cloud"); } catch (error) {}
@@ -3281,6 +3308,7 @@
       button.onclick = function () { setEngineMode(button.getAttribute("data-engine-mode")); };
     });
     if (byId("probeGateway")) byId("probeGateway").onclick = activateCloudProbe;
+    if (byId("humanHandover")) byId("humanHandover").onclick = requestHumanHandover;
     all("[data-voice-gender]").forEach(function (button) {
       button.onclick = function () {
         savedVoiceGender = button.getAttribute("data-voice-gender") === "male" ? "male" : "female";

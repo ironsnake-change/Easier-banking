@@ -282,6 +282,10 @@ class AssistantChatRequest(BaseModel):
     elder_mode: bool | None = None
 
 
+class HumanHandoverRequest(BaseModel):
+    reason: str = Field(default="用户主动请求人工客服接管", max_length=500)
+
+
 class ProposeActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: dict[str, Any]
@@ -657,6 +661,43 @@ def assistant_action_deprecated():
 def assistant_probe(x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
     user_id = _session_user(x_session_token)
     return ai_banking_assistant.probe(user_id)
+
+
+@app.post("/api/support/handover")
+def support_handover(
+    request: HumanHandoverRequest,
+    x_session_token: str | None = Header(default=None, alias="X-Session-Token"),
+):
+    user_id = _session_user(x_session_token)
+    live_state = build_live_state(user_id)
+    snapshot = {
+        "user_profile": live_state.get("user_profile", {}),
+        "accounts": live_state.get("accounts", []),
+        "risk_limit": live_state.get("risk_limit", {}),
+        "security_status": security_gateway.get_security_status(user_id),
+        "recent_messages": workspace.get_chat_messages(user_id, limit=20),
+        "recent_dag_tasks": database.fetch_all(
+            "SELECT dag_id,overall_status,updated_at FROM agent_dag_tasks "
+            "WHERE user_id=? ORDER BY updated_at DESC LIMIT 5",
+            (user_id,),
+        ),
+    }
+    ticket = workspace.create_support_ticket(user_id, request.reason, snapshot)
+    security_gateway.log_event(
+        user_id,
+        "HUMAN_HANDOVER_CREATED",
+        "support_handover",
+        "GREEN",
+        {"ticket_id": ticket["ticket_id"], "reason": request.reason},
+        "OPEN",
+    )
+    return {
+        "status": "success",
+        "ticket_id": ticket["ticket_id"],
+        "ticket_status": ticket["status"],
+        "created_at": ticket["created_at"],
+        "summary": "人工接管工单已建立，账户上下文与最近对话已一并提交。",
+    }
 
 
 @app.post("/api/compliance/precheck")

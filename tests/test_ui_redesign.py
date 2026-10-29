@@ -178,6 +178,12 @@ def test_browser_never_accepts_or_stores_a_direct_model_key():
     assert "eb_direct_api_key" not in APP
 
 
+def test_human_handover_is_exposed_without_changing_existing_controls():
+    assert 'id="humanHandover"' in INDEX
+    assert "requestHumanHandover" in APP
+    assert "/api/support/handover" in APP
+
+
 def _png_dimensions(path: Path) -> tuple[int, int]:
     payload = path.read_bytes()
     assert payload[:8] == b"\x89PNG\r\n\x1a\n"

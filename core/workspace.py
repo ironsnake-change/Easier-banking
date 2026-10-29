@@ -121,8 +121,24 @@ def ensure_workspace_schema(db_path: str | Path | None = None) -> Path:
                     window_started_epoch REAL NOT NULL,
                     locked_until_epoch REAL NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    ticket_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS agent_dag_tasks (
+                    dag_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    overall_status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_time ON chat_messages(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_pockets_user ON pockets(user_id);
+                CREATE INDEX IF NOT EXISTS idx_support_tickets_user_time ON support_tickets(user_id, created_at);
                 """
             )
             table_extensions = {
@@ -362,6 +378,30 @@ def create_session(user_id: str, db_path: str | Path | None = None) -> str:
     finally:
         connection.close()
     return token
+
+
+def create_support_ticket(
+    user_id: str,
+    reason: str,
+    snapshot: dict[str, Any],
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Persist a human-handover request with a sanitized context snapshot."""
+    ensure_workspace_schema(db_path)
+    ticket_id = "CS-" + secrets.token_hex(4).upper()
+    created_at = _now()
+    with _LOCK:
+        connection = database.get_connection(db_path)
+        try:
+            connection.execute(
+                "INSERT INTO support_tickets (ticket_id,user_id,reason,status,snapshot_json,created_at) "
+                "VALUES (?,?,?,'OPEN',?,?)",
+                (ticket_id, user_id, str(reason)[:500], _json(snapshot), created_at),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+    return {"ticket_id": ticket_id, "status": "OPEN", "created_at": created_at}
 
 
 def resolve_session(token: str | None, db_path: str | Path | None = None) -> str | None:

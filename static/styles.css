@@ -270,6 +270,8 @@ svg { display: block; }
 .assistant-panel { display: flex; flex-direction: column; min-height: 0; padding: 18px; }
 .assistant-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 2px 2px 14px; border-bottom: 1px solid var(--line-soft); }
 .assistant-head h2 { margin: 4px 0 0; font-size: 19px; letter-spacing: -.025em; }
+.assistant-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.assistant-head-actions .outline-button { min-height: 31px; padding: 5px 10px; font-size: 12px; }
 .online-pill { display: flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .online-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: breathe 2.4s ease-in-out infinite; }
 @keyframes breathe { 50% { opacity: .45; transform: scale(.8); } }
