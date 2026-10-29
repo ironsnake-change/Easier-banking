@@ -285,7 +285,7 @@ svg { display: block; }
 .message-row { display: flex; flex-direction: column; margin-bottom: 14px; }
 .message-row.user { align-items: flex-end; }
 .message-bubble { max-width: 91%; padding: 11px 13px; border: 1px solid var(--line-soft); border-radius: 14px 14px 14px 5px; background: var(--panel-raised); color: var(--ink-soft); font-size: 12px; line-height: 1.72; white-space: pre-wrap; word-break: break-word; }
-.message-row.user .message-bubble { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 14px 14px 5px 14px; background: var(--accent-soft); color: var(--ink); }
+.message-row.user .message-bubble { border: 1px solid var(--line); border-radius: 14px 14px 5px 14px; background: var(--panel-raised); color: var(--ink); }
 .clarification-options { display: flex; flex-wrap: wrap; gap: 6px; max-width: 91%; margin-top: 7px; }
 .clarification-options button { min-height: 28px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--panel) 84%, transparent); color: var(--ink-soft); font-size: 12px; line-height: 1.35; text-align: left; }
 .clarification-options button:hover { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); color: var(--ink); background: var(--accent-soft); }

@@ -168,6 +168,9 @@ def test_authorization_otp_and_message_contracts_remain_available():
     assert "演示模式：验证码见提示" in APP
     assert '(isUser ? "" : "Easier-banking · ")' in APP
     assert "proposal-reasons" in APP
+    user_bubble_rule = ".message-row.user .message-bubble { border: 1px solid var(--line);"
+    assert user_bubble_rule in STYLES
+    assert "background: var(--panel-raised)" in STYLES[STYLES.index(user_bubble_rule):STYLES.index(user_bubble_rule) + 180]
 
 
 def _png_dimensions(path: Path) -> tuple[int, int]:
