@@ -370,7 +370,7 @@ def _explicit_complete_write(text: str) -> bool:
     if re.search(rf"(?:存|划|取)[^，。,.!?！？]{{0,12}}{_AMOUNT_TOKEN_RE}[^，。,.!?！？]{{0,8}}口袋", text):
         return True
     if any(word in text for word in ("赎回", "申购")) and any(
-        word in text for word in ("朝朝宝", "季季盈", "主动股票", "股票精选")
+        word in text for word in ("日日享", "季季盈", "主动股票", "股票精选")
     ):
         return True
     return False
@@ -447,11 +447,11 @@ def infer_action(message: str, user_id: str | None = None) -> dict[str, Any] | N
             operation = "deposit"
         return {"action": "manage_pocket", "params": {"operation": operation, "name": name, "amount": amount}}
 
-    if "赎回" in text and any(word in text for word in ("理财", "朝朝宝", "季季盈", "持仓")):
-        product = "微众活期+朝朝宝" if "朝朝宝" in text else "微众稳健季季盈" if "季季盈" in text else ""
+    if "赎回" in text and any(word in text for word in ("理财", "日日享", "季季盈", "持仓")):
+        product = "活期+日日享" if "日日享" in text else "稳健理财季季盈" if "季季盈" in text else ""
         return {"action": "redeem_wealth", "params": {"product_name": product, "amount": amount}}
     if any(word in text for word in ("申购", "追加")) and "理财" in text:
-        product = "微众活期+朝朝宝" if "朝朝宝" in text else "微众稳健季季盈" if "季季盈" in text else ""
+        product = "活期+日日享" if "日日享" in text else "稳健理财季季盈" if "季季盈" in text else ""
         return {"action": "subscribe_wealth", "params": {"product_name": product, "amount": amount}}
 
     if "转" in text or "汇" in text:
@@ -842,7 +842,7 @@ def _validate_action_entities(user_id: str, action: dict[str, Any], message: str
         if not product:
             return None, _clarification(
                 f"未找到理财产品「{product_name}」，请选择明确的产品。",
-                ["微众活期+朝朝宝", "微众稳健季季盈"], tool_name=name, scene="理财操作",
+                ["活期+日日享", "稳健理财季季盈"], tool_name=name, scene="理财操作",
             )
         params["product_name"] = str(product["name"])
         return action, None

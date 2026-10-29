@@ -13,7 +13,7 @@
   var API_TIMEOUT = 2500;
   var currentTab = "overview";
   var chartType = "line";
-  var state = { token: "", data: null, source: "local", pending: null };
+  var state = { token: "", data: null, source: "local", pending: null, publicConfig: {} };
   var localAccounts = {};
   var typing = false;
   var toastTimer = null;
@@ -318,13 +318,13 @@
       { card_id: "CARD_L_02", user_id: userId, card_no: "625965******4806", card_type: "私人银行信用卡", status: "ACTIVE", daily_limit: 30000, night_lock: 0, overseas_lock: 0, holder_name: name }
     ]);
     var holdings = isNew ? [
-      { holding_id: "HOLD_NEW", user_id: userId, product_id: "PROD_01", product_name: "微众活期+朝朝宝", risk_grade: "R1", amount: 0, accrued_profit: 0 }
+      { holding_id: "HOLD_NEW", user_id: userId, product_id: "PROD_01", product_name: "活期+日日享", risk_grade: "R1", amount: 0, accrued_profit: 0 }
     ] : (isElder ? [
-      { holding_id: "HOLD_Z_01", user_id: userId, product_id: "PROD_01", product_name: "微众活期+朝朝宝", risk_grade: "R1", amount: 10000, accrued_profit: 186.5 },
-      { holding_id: "HOLD_Z_02", user_id: userId, product_id: "PROD_02", product_name: "微众稳健季季盈", risk_grade: "R2", amount: 30000, accrued_profit: 678.2 }
+      { holding_id: "HOLD_Z_01", user_id: userId, product_id: "PROD_01", product_name: "活期+日日享", risk_grade: "R1", amount: 10000, accrued_profit: 186.5 },
+      { holding_id: "HOLD_Z_02", user_id: userId, product_id: "PROD_02", product_name: "稳健理财季季盈", risk_grade: "R2", amount: 30000, accrued_profit: 678.2 }
     ] : [
-      { holding_id: "HOLD_L_01", user_id: userId, product_id: "PROD_01", product_name: "微众活期+朝朝宝", risk_grade: "R1", amount: 30000, accrued_profit: 412.5 },
-      { holding_id: "HOLD_L_02", user_id: userId, product_id: "PROD_02", product_name: "微众稳健季季盈", risk_grade: "R2", amount: 20000, accrued_profit: 386.7 }
+      { holding_id: "HOLD_L_01", user_id: userId, product_id: "PROD_01", product_name: "活期+日日享", risk_grade: "R1", amount: 30000, accrued_profit: 412.5 },
+      { holding_id: "HOLD_L_02", user_id: userId, product_id: "PROD_02", product_name: "稳健理财季季盈", risk_grade: "R2", amount: 20000, accrued_profit: 386.7 }
     ]);
     var welcome = isNew
       ? "您好，" + name + "。您的数字银行账户已开立，首笔 ¥50,000.00 体验资金已入账。我可以帮您查看收支、配置专项资金口袋并建立安全审计链。"
@@ -346,8 +346,8 @@
       pockets: pockets,
       cards: cards,
       wealth_products: [
-        { product_id: "PROD_01", name: "微众活期+朝朝宝", risk_grade: "R1", expected_yield: "2.35%", min_amount: 1, term_days: 0 },
-        { product_id: "PROD_02", name: "微众稳健季季盈", risk_grade: "R2", expected_yield: "3.45%", min_amount: 100, term_days: 90 },
+        { product_id: "PROD_01", name: "活期+日日享", risk_grade: "R1", expected_yield: "2.35%", min_amount: 1, term_days: 0 },
+        { product_id: "PROD_02", name: "稳健理财季季盈", risk_grade: "R2", expected_yield: "3.45%", min_amount: 100, term_days: 90 },
         { product_id: "PROD_03", name: "全球科技激进股票精选", risk_grade: "R4", expected_yield: "8.80% (高波动)", min_amount: 1000, term_days: 180 }
       ],
       wealth_holdings: holdings,
@@ -544,6 +544,7 @@
   }
 
   function showAuth() {
+    closeProfileMenu();
     cls(byId("authView"), "is-hidden", false);
     cls(byId("appView"), "is-hidden", true);
     document.body.classList.remove("elder");
@@ -562,11 +563,43 @@
     }
   }
 
+  async function loadPublicConfig() {
+    var panel = byId("demoTools");
+    if (!panel) return;
+    if (location.protocol === "file:") {
+      panel.hidden = true;
+      return;
+    }
+    try {
+      var configPayload = await requestJSON("/api/public-config", { timeout: 4000 });
+      state.publicConfig = configPayload || {};
+      panel.hidden = !(state.publicConfig.demo_mode === true || state.publicConfig.demo_mode === 1);
+    } catch (error) {
+      state.publicConfig = {};
+      panel.hidden = true;
+    }
+  }
+
+  function closeProfileMenu() {
+    var menu = byId("profileMenu");
+    var trigger = byId("accountPill");
+    if (menu) menu.classList.add("is-hidden");
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleProfileMenu() {
+    var menu = byId("profileMenu");
+    var trigger = byId("accountPill");
+    if (!menu || !trigger) return;
+    var hidden = menu.classList.toggle("is-hidden");
+    trigger.setAttribute("aria-expanded", String(!hidden));
+  }
+
   function openModal(options) {
     var modal = byId("modalBackdrop");
     if (!modal) return;
     state.modalCancel = null;
-    safeText("modalKicker", options.kicker || "SECURE ACTION");
+    safeText("modalKicker", options.kicker || "安全确认");
     safeText("modalTitle", options.title || "安全确认");
     safeText("modalSubtitle", options.subtitle || "");
     safeHTML("modalBody", options.body || "");
@@ -600,7 +633,7 @@
   function confirmAction(title, subtitle, body, confirmLabel) {
     return new Promise(function (resolve) {
       openModal({
-        kicker: "SECURITY CONFIRMATION",
+        kicker: "安全确认",
         title: title,
         subtitle: subtitle,
         body: body,
@@ -794,7 +827,7 @@
       modeBadge.classList.remove("online", "offline", "checking");
       modeBadge.classList.add(engineState.mode === "cloud" && status === "online" ? "online" : status === "checking" ? "checking" : "offline");
       var modeCopy = modeBadge.querySelector("span");
-      if (modeCopy) modeCopy.textContent = engineState.mode === "cloud" && status === "online" ? "模式：云端" : status === "checking" ? "模式：检测中" : "模式：离线";
+      if (modeCopy) modeCopy.textContent = engineState.mode === "cloud" && status === "online" ? "云端" : status === "checking" ? "检测中" : "离线";
     }
     safeText("engineLabel", engineState.mode === "local"
       ? "当前模式: 离线只读缓存 · 禁止本地资金操作"
@@ -902,11 +935,11 @@
       var operation = /取出/.test(value) ? "withdraw" : /新建|创建/.test(value) ? "create" : "deposit";
       return { action: "manage_pocket", params: { operation: operation, name: pocketName, amount: amount } };
     }
-    if (/赎回/.test(value) && /理财|朝朝宝|季季盈|持仓/.test(value)) {
-      return { action: "redeem_wealth", params: { product_name: /朝朝宝/.test(value) ? "微众活期+朝朝宝" : /季季盈/.test(value) ? "微众稳健季季盈" : "", amount: amount } };
+    if (/赎回/.test(value) && /理财|日日享|季季盈|持仓/.test(value)) {
+      return { action: "redeem_wealth", params: { product_name: /日日享/.test(value) ? "活期+日日享" : /季季盈/.test(value) ? "稳健理财季季盈" : "", amount: amount } };
     }
     if (/申购|追加/.test(value) && /理财/.test(value)) {
-      return { action: "subscribe_wealth", params: { product_name: /朝朝宝/.test(value) ? "微众活期+朝朝宝" : /季季盈/.test(value) ? "微众稳健季季盈" : "", amount: amount } };
+      return { action: "subscribe_wealth", params: { product_name: /日日享/.test(value) ? "活期+日日享" : /季季盈/.test(value) ? "稳健理财季季盈" : "", amount: amount } };
     }
     if (/转|汇/.test(value)) {
       var patterns = [
@@ -1557,7 +1590,7 @@
       if (compliance) badge += '<span class="compliance-badge">🛡️ 业务合规边界提示</span>';
       if (offlineReadOnly) badge += '<span class="compliance-badge">离线只读缓存 · 未执行资金操作</span>';
       var menu = isUser ? "" : '<div class="message-tools"><button class="more-button" type="button" aria-label="消息操作">⋯</button><div class="message-menu"><button type="button" data-message-action="copy" data-message-index="' + index + '">📋 复制</button><button type="button" data-message-action="speak" data-message-index="' + index + '">🔊 朗读</button>' + (receipt ? '<button type="button" data-message-action="receipt" data-message-index="' + index + '">🧾 追溯回单</button>' : '') + '</div></div>';
-      return '<article class="message-row ' + (isUser ? "user" : "assistant") + '" data-message-row="' + index + '"><div class="message-bubble"><div class="message-text">' + esc(display) + '</div>' + (isUser ? "" : miniSummaryPills(message)) + '</div>' + (isUser ? "" : renderClarificationOptions(message, index)) + (isUser ? "" : renderAuthorizationCard(message, index)) + '<div class="message-meta"><span>Easier-banking · ' + esc(formatMessageTime(message.created_at)) + '</span>' + badge + '</div>' + menu + '</article>';
+      return '<article class="message-row ' + (isUser ? "user" : "assistant") + '" data-message-row="' + index + '"><div class="message-bubble"><div class="message-text">' + esc(display) + '</div>' + (isUser ? "" : miniSummaryPills(message)) + '</div>' + (isUser ? "" : renderClarificationOptions(message, index)) + (isUser ? "" : renderAuthorizationCard(message, index)) + '<div class="message-meta"><span>' + (isUser ? "" : "Easier-banking · ") + esc(formatMessageTime(message.created_at)) + '</span>' + badge + '</div>' + menu + '</article>';
     }).join("");
     if (typing) {
       html += '<article class="message-row assistant"><div class="message-bubble typing-bubble"><i></i><i></i><i></i></div><div class="message-meta">安全推理中 · 本地账本只读校验</div></article>';
@@ -1615,13 +1648,14 @@
 
   function renderProfile() {
     var profile = profileData();
+    safeText("accountInitials", String(profile.name || "E").trim().slice(0, 1).toUpperCase());
     safeText("accountLabel", (profile.name || "当前储户") + " · 尾号 " + (profile.display_card_tail || "8848"));
     safeText("accountKyc", profile.kyc_verified === false ? "KYC 待核验" : "KYC 已核验");
     safeText("accountTail", "账户尾号 " + (profile.display_card_tail || "8848"));
     safeText("overviewMode", profile.account_type === "elder" ? "长辈关怀账户" : "标准个人网银");
     safeText("quickModeHint", profile.account_type === "elder" ? "长辈关怀话术" : "智能财务话术");
     document.body.classList.toggle("elder", !!profile.elderly_mode);
-    safeText("elderToggleTop", "长辈关怀: " + (profile.elderly_mode ? "开" : "关"));
+    safeText("elderToggleTop", "长辈关怀：" + (profile.elderly_mode ? "开" : "关"));
     safeText("engineLabel", engineState.mode === "local"
       ? "当前模式: 离线只读缓存 · 禁止本地资金操作"
       : engineState.status === "online" ? "当前模式: 云端 GLM-4-Flash · 实时业务引擎" : "当前模式: 离线规则引擎 · 服务恢复前不执行写操作");
@@ -1753,15 +1787,15 @@
     var line = getComputedStyle(document.body).getPropertyValue("--line").trim() || "#333";
     var ink = getComputedStyle(document.body).getPropertyValue("--ink-soft").trim() || "#eee";
     var accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#10b981";
-    var gold = getComputedStyle(document.body).getPropertyValue("--gold").trim() || "#d8b56c";
-    var amber = getComputedStyle(document.body).getPropertyValue("--amber").trim() || "#e5b868";
-    var green = getComputedStyle(document.body).getPropertyValue("--green").trim() || "#54d29b";
-    context.font = "10px " + getComputedStyle(document.body).fontFamily;
+    var gold = getComputedStyle(document.body).getPropertyValue("--gold").trim() || "#8E8E8E";
+    var amber = getComputedStyle(document.body).getPropertyValue("--amber").trim() || "#D9B26A";
+    var green = getComputedStyle(document.body).getPropertyValue("--green").trim() || "#6FBF9A";
+    context.font = "12px " + getComputedStyle(document.body).fontFamily;
     if (chartType === "doughnut") {
       var categories = data.categories.slice(0, 6);
       var total = categories.reduce(function (sum, item) { return sum + Number(item.amount || 0); }, 0) || 1;
       var centerX = width / 2, centerY = height / 2, radius = Math.min(width, height) * .31;
-      var colors = [accent, gold, "#babcc7", "#7f818c", green, "#656773"];
+      var colors = [accent, gold, "#BABABA", "#7F7F7F", green, "#656565"];
       var start = -Math.PI / 2;
       categories.forEach(function (item, index) {
         var angle = Number(item.amount || 0) / total * Math.PI * 2;
@@ -1785,7 +1819,7 @@
     for (var guide = 0; guide < 4; guide++) {
       var y = top + plotHeight * guide / 3;
       context.beginPath(); context.moveTo(left, y); context.lineTo(width - right, y); context.stroke();
-      context.fillStyle = muted; context.textAlign = "right"; context.font = "8px " + getComputedStyle(document.body).fontFamily;
+      context.fillStyle = muted; context.textAlign = "right"; context.font = "12px " + getComputedStyle(document.body).fontFamily;
       context.fillText(chartAmount(max * (1 - guide / 3)), width - 5, y + 3);
     }
     context.setLineDash([]);
@@ -1804,16 +1838,6 @@
     } else {
       [{ key: "income", color: green }, { key: "expense", color: gold }].forEach(function (series, seriesIndex) {
         var seriesPoints = points.map(function (item, index) { return { x: xAt(index), y: yAt(item[series.key]) }; });
-        var fill = context.createLinearGradient(0, top, 0, top + plotHeight);
-        fill.addColorStop(0, seriesIndex ? "rgba(216,181,108,.2)" : "rgba(16,185,129,.2)");
-        fill.addColorStop(1, "rgba(16,185,129,0)");
-        context.beginPath();
-        smoothChartPath(context, seriesPoints);
-        context.lineTo(seriesPoints[seriesPoints.length - 1].x, top + plotHeight);
-        context.lineTo(seriesPoints[0].x, top + plotHeight);
-        context.closePath();
-        context.fillStyle = fill;
-        context.fill();
         context.beginPath();
         smoothChartPath(context, seriesPoints);
         context.strokeStyle = series.color; context.lineWidth = 2; context.lineCap = "round"; context.lineJoin = "round"; context.stroke();
@@ -1822,7 +1846,7 @@
         });
       });
     }
-    context.fillStyle = muted; context.textAlign = "center"; context.font = "9px " + getComputedStyle(document.body).fontFamily;
+    context.fillStyle = muted; context.textAlign = "center"; context.font = "12px " + getComputedStyle(document.body).fontFamily;
     points.forEach(function (item, index) {
       context.fillText(String(item.period || "").slice(5) + "月", xAt(index), height - 10);
     });
@@ -1833,9 +1857,8 @@
       var pulse = 7 + chartPulsePhase * 5;
       context.beginPath(); context.strokeStyle = "rgba(229,184,104," + (0.35 - chartPulsePhase * .18) + ")"; context.lineWidth = 2;
       context.arc(x, y, pulse, 0, Math.PI * 2); context.stroke();
-      context.save(); context.shadowColor = amber; context.shadowBlur = 15;
-      context.beginPath(); context.fillStyle = amber; context.arc(x, y, 4, 0, Math.PI * 2); context.fill(); context.restore();
-      context.fillStyle = amber; context.font = "700 8px " + getComputedStyle(document.body).fontFamily;
+      context.beginPath(); context.fillStyle = amber; context.arc(x, y, 4, 0, Math.PI * 2); context.fill();
+      context.fillStyle = amber; context.font = "700 12px " + getComputedStyle(document.body).fontFamily;
       context.textAlign = index > points.length - 3 ? "right" : "left";
       context.fillText(money(anchor.amount) + " 异常探测", index > points.length - 3 ? x - 8 : x + 8, y - 10);
     });
@@ -1902,7 +1925,7 @@
         '<div class="card-tools"><button type="button" data-card-action="reveal" data-card-id="' + esc(cardId) + '">👁 ' + (revealed ? "收起详情" : "卡片详情") + '</button><button type="button" data-card-action="freeze" data-card-id="' + esc(cardId) + '">' + (frozen ? "☀️ 解冻" : "❄️ 冻结") + '</button></div>' +
         '<div class="card-chip-row"><div class="card-chip"></div><svg class="nfc-wave" viewBox="0 0 28 22" aria-label="NFC 非接支付"><path d="M6 7c2.4-2.2 5.3-3.3 8.4-3.3M5 11c3-2.6 6.2-3.9 9.6-3.9M4 15c3.5-3 7.2-4.5 10.9-4.5M17.5 6.2c2.7 1.5 4.7 3.8 5.8 6.8-1.1 3-3.1 5.3-5.8 6.8"/></svg></div><div class="card-number">' + (revealed ? esc(fullNo) : "•••• •••• •••• " + esc(tail)) + '</div>' +
         '<div class="card-secret"><span>有效期 ' + esc(card.expiry_date || (silver ? "09/31" : "10/30")) + '</span><span>CVV ' + esc(card.cvv_code || (tail === "4806" ? "482" : "819")) + '</span><button type="button" data-card-action="copy" data-card-id="' + esc(cardId) + '" data-copy="' + esc(String(fullNo).replace(/\s/g, "")) + '">复制卡号</button></div>' +
-        '<div class="card-network"><span class="network-ring ring-a"></span><span class="network-ring ring-b"></span><small>EB PRIVATE</small></div>' +
+        '<div class="card-network"><small>EB</small></div>' +
         (frozen ? '<span class="card-status-frozen">TEMPORARILY FROZEN</span>' : '') +
         '<footer><span><small>CARD HOLDER</small><b>' + esc(card.holder_name || profileData().name || "CURRENT MEMBER") + '</b></span><span><small>BILLING DATE</small><b>' + (silver ? "每月 18 日" : "实时结算") + '</b></span></footer></article>' +
         '<div class="card-console"><div class="card-console-head"><b>' + esc(card.card_type || "银行卡") + '</b><span>' + (frozen ? "已临时止付" : "ACTIVE · 单日限额 " + money(card.daily_limit)) + '</span></div><div class="security-matrix">' +
@@ -1939,7 +1962,7 @@
           runSensitiveAction({
             action: "card_control",
             params: { card_tail: cardTail(card.card_no), operation: frozen ? "unfreeze" : "freeze" }
-          }, frozen ? "解冻银行卡" : "冻结银行卡", frozen ? "解冻会恢复全部支付通道，需要 L2 授权确认。" : "冻结后卡片将立即进入临时止付状态。");
+          }, frozen ? "解冻银行卡" : "冻结银行卡", frozen ? "解冻会恢复全部支付通道，需要 L3 强验证。" : "冻结后卡片将立即进入临时止付状态。");
         }
       };
     });
@@ -1952,7 +1975,7 @@
         runSensitiveAction({
           action: "card_control",
           params: { card_tail: cardTail(card && card.card_no), operation: field, value: next }
-        }, next ? "开启卡片安全保护" : "关闭卡片安全保护", next ? "保护性设置将即时生效。" : "关闭安全保护会扩大交易权限，需要 L2 授权确认。");
+        }, next ? "开启卡片安全保护" : "关闭卡片安全保护", next ? "保护性设置将即时生效。" : "关闭安全保护会扩大交易权限，需要 L3 强验证。");
       };
     });
     all("#holdingList [data-holding-action]").forEach(function (button) {
@@ -1971,10 +1994,10 @@
   function openHoldingAmountDialog(action, holding) {
     var label = action === "redeem" ? "快速赎回至活期" : "申购追加";
     openModal({
-      kicker: "WEALTH MANAGEMENT",
+      kicker: "理财操作",
       title: label,
       subtitle: holding.product_name + " · 当前持仓 " + money(holding.amount),
-      body: '<label class="field"><span>本次金额</span><input id="holdingAmount" type="number" min="0.01" step="0.01" value="' + (action === "redeem" ? Math.min(1000, Number(holding.amount || 0)) : "1000") + '"></label><div class="confirm-summary"><span class="eyebrow">L2 CONTROLLED OPERATION</span><small>' + (action === "redeem" ? "赎回资金将实时返回活期主账户。" : "追加申购将从活期余额划入该理财持仓。") + '</small></div>',
+      body: '<label class="field"><span>本次金额</span><input id="holdingAmount" type="number" min="0.01" step="0.01" value="' + (action === "redeem" ? Math.min(1000, Number(holding.amount || 0)) : "1000") + '"></label><div class="confirm-summary"><span class="dialog-kicker">L2 受控操作</span><small>' + (action === "redeem" ? "赎回资金将实时返回活期主账户。" : "追加申购将从活期余额划入该理财持仓。") + '</small></div>',
       actions: [
         { label: "取消" },
         { label: "确认继续", primary: true, keepOpen: true, onClick: async function () {
@@ -2001,7 +2024,7 @@
       typeof action.params.value === "number" ? action.params.value : 0
     );
     var hint = proposal.demo_hint && proposal.demo_hint.otp ? proposal.demo_hint.otp : "";
-    return '<div class="confirm-summary"><span class="eyebrow">' + esc(authorization.level || proposal.level) + ' SECURE PROPOSAL</span><strong>' + money(amount) + '</strong><small>' +
+    return '<div class="confirm-summary"><span class="dialog-kicker">' + esc(authorization.level || proposal.level) + ' 安全确认</span><strong>' + money(amount) + '</strong><small>' +
       esc(actionLabel(action.action)) + ' · ' + esc(authorization.target || action.params.recipient || action.params.service_name || action.params.name || action.params.card_tail || "当前账户") +
       '<br>授权有效期至 ' + esc(String(proposal.expires_at || authorization.expires_at || "").replace("T", " ").slice(0, 19)) + '</small></div>' +
       '<div class="proposal-reasons">' + reasons.map(function (reason) { return '<span>' + esc(reason) + '</span>'; }).join("") + '</div>' +
@@ -2021,7 +2044,7 @@
       var authorization = proposal.authorization || proposal.card;
       var requiresOtp = proposal.requires_otp || authorization.otp_required || authorization.level === "L3";
       openModal({
-        kicker: "SERVER-ISSUED AUTHORIZATION",
+        kicker: "服务端授权",
         title: title || "交易安全授权",
         subtitle: subtitle || "账务变更只会在确认提案后执行。",
         body: proposalModalBody(proposal, action),
@@ -2192,7 +2215,7 @@
       modeBadge.classList.remove("online", "offline", "checking");
       modeBadge.classList.add(cloud && engineState.status === "online" ? "online" : engineState.status === "checking" ? "checking" : "offline");
       var modeCopy = modeBadge.querySelector("span");
-      if (modeCopy) modeCopy.textContent = cloud && engineState.status === "online" ? "模式：云端" : engineState.status === "checking" ? "模式：检测中" : "模式：离线";
+      if (modeCopy) modeCopy.textContent = cloud && engineState.status === "online" ? "云端" : engineState.status === "checking" ? "检测中" : "离线";
     }
   }
 
@@ -2235,7 +2258,7 @@
       }).join("") + '</section>';
     }
     openModal({
-      kicker: "ELECTRONIC RECEIPT & TRACE",
+      kicker: "电子回单与追溯",
       title: "电子交易回单与全链路追溯",
       subtitle: "交易凭证已绑定当前储户，SHA-256 区块签名可独立校验。",
       body: body,
@@ -2357,7 +2380,10 @@
   }
 
   function applyTheme(theme, persist) {
-    document.body.setAttribute("data-theme", theme === "light" ? "light" : "dark");
+    var resolved = theme === "light" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", resolved);
+    document.documentElement.style.colorScheme = resolved;
+    document.body.setAttribute("data-theme", resolved);
     if (persist !== false) { try { localStorage.setItem(STORAGE_THEME, theme); } catch (error) {} }
     themeIcon();
     if (currentTab === "analytics") startChartAnimation();
@@ -2365,7 +2391,7 @@
   }
 
   function toggleTheme() {
-    var next = document.body.getAttribute("data-theme") === "light" ? "dark" : "light";
+    var next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
     applyTheme(next, true);
     toast(next === "dark" ? "已切换至曜石黑主题。" : "已切换至纯净白主题。");
   }
@@ -2645,7 +2671,7 @@
     return confirmAction(
       risk === "RED" ? "红色强验证 · 确认大额转账" : "黄色确认 · 核对转账指令",
       risk === "RED" ? "本次操作累计超过今日安全限额，将执行强化身份核验。" : "本次操作处于今日安全限额内，请确认收款关系与金额。",
-      '<div class="confirm-summary"><span class="eyebrow">TRANSFER AUTHORIZATION</span><strong>' + money(amount) + '</strong><small>收款方：' + esc(recipient) + '<br>风险级别：' + esc(risk) + '<br>交易后将同步写入账户流水与 SHA-256 审计链。</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">转账确认</span><strong>' + money(amount) + '</strong><small>收款方：' + esc(recipient) + '<br>风险级别：' + esc(risk) + '<br>交易后将同步写入账户流水与 SHA-256 审计链。</small></div>',
       risk === "RED" ? "完成强验证并转账" : "确认转账"
     );
   }
@@ -2685,7 +2711,7 @@
     var approved = await confirmAction(
       "专项资金口袋划拨确认",
       "资金将转入「川西旅游基金」并完成机票商户锁定。",
-      '<div class="confirm-summary"><span class="eyebrow">DAG · SAGA MULTI-STAGE ACTION</span><strong>' + money(amount) + '</strong><small>DAG 节点：专项口袋划拨 → 外部航司商户锁定 → 账本提交。任一外部节点失败将自动逆向回滚。</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">多阶段资金操作</span><strong>' + money(amount) + '</strong><small>DAG 节点：专项口袋划拨 → 外部航司商户锁定 → 账本提交。任一外部节点失败将自动逆向回滚。</small></div>',
       "确认划拨并锁定"
     );
     if (!approved) {
@@ -2721,7 +2747,7 @@
     var approved = authorizationComplete === true ? true : await confirmAction(
       risk ? "拦截高危周期性代扣" : "解除自动续费协议",
       risk ? "该商户命中高危免密代扣规则，确认后立即解除协议并写入安全审计链。" : "确认解除后，商户将无法继续发起周期扣款。",
-      '<div class="confirm-summary"><span class="eyebrow">SUBSCRIPTION RADAR</span><strong>' + money(subscription.amount) + '</strong><small>商户：' + esc(subscription.merchant || "自动代扣") + '<br>周期：' + esc(subscription.cycle || "每月") + '<br>处理结果：协议状态变更为已拦截并解除。</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">订阅代扣</span><strong>' + money(subscription.amount) + '</strong><small>商户：' + esc(subscription.merchant || "自动代扣") + '<br>周期：' + esc(subscription.cycle || "每月") + '<br>处理结果：协议状态变更为已拦截并解除。</small></div>',
       risk ? "确认拦截并解除" : "确认解除协议"
     );
     if (!approved) return { reply: "已取消本次退订操作，代扣协议保持原状态。" };
@@ -2966,7 +2992,7 @@
     var confirmed = await confirmAction(
       pending.risk_level === "RED" ? "红色强验证 · 继续执行" : "黄色确认 · 核对交易指令",
       pending.confirmation_prompt || pending.risk_reason || "该操作需要您的二次确认。",
-      '<div class="confirm-summary"><span class="eyebrow">DAG · PENDING AUTHORIZATION</span><strong>' + money(pending.amount || 0) + '</strong><small>' + esc(pending.summary || pending.risk_reason || "系统已完成前置风控扫描，确认后将提交事务节点。") + '</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">待授权交易</span><strong>' + money(pending.amount || 0) + '</strong><small>' + esc(pending.summary || pending.risk_reason || "系统已完成前置风控扫描，确认后将提交事务节点。") + '</small></div>',
       pending.risk_level === "RED" ? "完成强验证" : "确认执行"
     );
     if (!confirmed) {
@@ -3114,7 +3140,7 @@
     var confirmed = await confirmAction(
       risk ? "拦截高危周期性代扣" : "解除自动续费协议",
       "确认后将立即终止商户的后续扣款授权，并生成可追溯电子回单。",
-      '<div class="confirm-summary"><span class="eyebrow">SUBSCRIPTION AUTHORIZATION</span><strong>' + money(subscription.amount) + '</strong><small>商户：' + esc(subscription.merchant) + '<br>周期：' + esc(subscription.cycle || "每月") + '</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">订阅授权</span><strong>' + money(subscription.amount) + '</strong><small>商户：' + esc(subscription.merchant) + '<br>周期：' + esc(subscription.cycle || "每月") + '</small></div>',
       "确认拦截并解除"
     );
     if (!confirmed) return;
@@ -3177,7 +3203,7 @@
     var confirmed = await confirmAction(
       "恢复初始账户数据",
       "该操作会重建演示账本、资金口袋、代扣项与创世审计块。",
-      '<div class="confirm-summary"><span class="eyebrow">SAFE RESET</span><strong>确认恢复</strong><small>当前聊天与交易记录将回到初始状态，已导出的电子回单文件不受影响。</small></div>',
+      '<div class="confirm-summary"><span class="dialog-kicker">数据重置</span><strong>确认恢复</strong><small>当前聊天与交易记录将回到初始状态，已导出的电子回单文件不受影响。</small></div>',
       "恢复初始数据"
     );
     if (!confirmed) return;
@@ -3248,6 +3274,10 @@
   function bindActions() {
     all("[data-tab]").forEach(function (button) { button.onclick = function () { switchTab(button.getAttribute("data-tab")); }; });
     if (byId("themeToggle")) byId("themeToggle").onclick = toggleTheme;
+    if (byId("accountPill")) byId("accountPill").onclick = function (event) {
+      event.stopPropagation();
+      toggleProfileMenu();
+    };
     all("[data-engine-mode]").forEach(function (button) {
       button.onclick = function () { setEngineMode(button.getAttribute("data-engine-mode")); };
     });
@@ -3333,13 +3363,25 @@
     if (byId("modalClose")) byId("modalClose").onclick = closeModal;
     if (byId("modalBackdrop")) byId("modalBackdrop").onclick = function (event) { if (event.target === byId("modalBackdrop")) closeModal(); };
     window.addEventListener("resize", function () { if (currentTab === "analytics") drawChart(); });
-    document.addEventListener("keydown", function (event) { if (event.key === "Escape") closeModal(); });
+    document.addEventListener("keydown", function (event) { if (event.key === "Escape") { closeModal(); closeProfileMenu(); } });
+    document.addEventListener("click", function (event) {
+      if (!event.target.closest || !event.target.closest(".profile-control")) closeProfileMenu();
+    });
   }
 
   function boot() {
-    var savedTheme = "dark";
-    try { savedTheme = localStorage.getItem(STORAGE_THEME) || "dark"; } catch (error) {}
+    var savedTheme = document.documentElement.getAttribute("data-theme") || "dark";
     applyTheme(savedTheme, false);
+    if (window.matchMedia) {
+      var themeMedia = window.matchMedia("(prefers-color-scheme: light)");
+      if (themeMedia.addEventListener) {
+        themeMedia.addEventListener("change", function (event) {
+          var stored = null;
+          try { stored = localStorage.getItem(STORAGE_THEME); } catch (error) {}
+          if (!stored) applyTheme(event.matches ? "light" : "dark", false);
+        });
+      }
+    }
     if (typeof window.getNaturalVoiceEngine === "function") {
       naturalVoice = window.getNaturalVoiceEngine({ gender: savedVoiceGender || "female" });
       naturalVoice.onStateChange(function (payload) {
@@ -3349,6 +3391,7 @@
     }
     bindAuth();
     bindActions();
+    loadPublicConfig();
     if (byId("directApiKey")) byId("directApiKey").value = sessionGet(DIRECT_KEY);
     renderEngine();
     renderVoiceSettings();

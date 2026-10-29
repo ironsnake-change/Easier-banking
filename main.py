@@ -313,6 +313,16 @@ def health():
     }
 
 
+@app.get("/api/public-config")
+def public_config():
+    """Expose only non-sensitive runtime switches used by the UI."""
+    return {
+        "demo_mode": config.demo_mode(),
+        "gateway_mode": config.gateway_mode(),
+        "model": config.GATEWAY_MODEL,
+    }
+
+
 @app.get("/api/auth/demo-accounts")
 def demo_accounts():
     workspace.ensure_workspace_schema()

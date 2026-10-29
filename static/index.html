@@ -8,6 +8,17 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23101114'/%3E%3Cpath d='M7 20l9-11.5L25 20m-14 3l5-6.4 5 6.4' fill='none' stroke='%23f4f4f5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <script>
     (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("easier_banking_theme_v3"); } catch (error) {}
+      var theme = saved === "dark" || saved === "light"
+        ? saved
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.style.colorScheme = theme;
+    })();
+  </script>
+  <script>
+    (function () {
       var staticBase = location.protocol === "file:" ? "./" : "/static/";
       var assetVersion = "20261028.4";
       var stylesheet = document.createElement("link");
@@ -70,13 +81,18 @@
     <header class="topbar">
       <div class="brand-lockup"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 19.5 16 8l9 11.5M11 22.5l5-6.4 5 6.4"/></svg></span><span><b>Easier-banking</b><small>PERSONAL FINANCIAL INTELLIGENCE</small></span></div>
       <div class="topbar-actions">
-        <span id="cloudStatus" class="cloud-pill checking"><i></i><span>云端 AI 链路检测中</span></span>
-        <span id="runtimeModeBadge" class="cloud-pill checking" aria-live="polite"><i></i><span>模式：检测中</span></span>
-        <button id="accountPill" class="account-pill" type="button" title="当前登录储户"><span class="status-dot"></span><span id="accountLabel">正在读取账户</span><small id="accountKyc">KYC 已核验</small></button>
+        <span id="cloudStatus" class="cloud-status-accessible checking"><i></i><span>云端 AI 链路检测中</span></span>
+        <span id="runtimeModeBadge" class="mode-indicator checking" aria-live="polite"><i></i><span>检测中</span></span>
         <button id="themeToggle" class="icon-button" type="button" aria-label="切换日间或夜间主题" title="切换主题"></button>
-        <button id="elderToggleTop" class="text-button" type="button">长辈关怀: 关</button>
-        <button id="switchAccount" class="text-button" type="button">切换账户</button>
-        <button id="logoutBtn" class="text-button danger-text" type="button">退出登录</button>
+        <div class="profile-control">
+          <button id="accountPill" class="avatar-button" type="button" title="储户菜单" aria-label="打开储户菜单" aria-haspopup="menu" aria-expanded="false"><span id="accountInitials">E</span></button>
+          <div id="profileMenu" class="profile-menu is-hidden" role="menu">
+            <div class="profile-menu-head"><b id="accountLabel">正在读取账户</b><small id="accountKyc">KYC 已核验</small></div>
+            <button id="elderToggleTop" type="button" role="menuitem">长辈关怀：关</button>
+            <button id="switchAccount" type="button" role="menuitem">切换账户</button>
+            <button id="logoutBtn" type="button" role="menuitem">退出登录</button>
+          </div>
+        </div>
       </div>
     </header>
     <main class="workspace">
@@ -94,10 +110,10 @@
 
       <section class="workbench panel">
         <nav class="workbench-tabs" role="tablist" aria-label="金融工作台">
-          <button class="active" type="button" role="tab" aria-selected="true" data-tab="overview">总览与智能执行</button>
-          <button type="button" role="tab" aria-selected="false" data-tab="analytics">统计图表与订阅雷达</button>
-          <button type="button" role="tab" aria-selected="false" data-tab="security">卡片持仓与安全审计</button>
-          <button type="button" role="tab" aria-selected="false" data-tab="settings">系统与偏好设置</button>
+          <button class="active" type="button" role="tab" aria-selected="true" data-tab="overview">总览</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="analytics">统计</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="security">卡片与安全</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="settings">设置</button>
         </nav>
         <div class="tab-stage">
           <section id="tab-overview" class="tab-pane active" data-pane="overview">
@@ -108,9 +124,9 @@
               <article class="metric-card"><span>今日剩余额度</span><strong id="dailyRemaining">0.00</strong><small id="dailyUsage">今日已使用 0.00 / 1,000.00</small></article>
             </div>
             <div class="limit-card"><div><span>今日安全转账限额</span><b id="limitText">0%</b></div><div class="progress"><i id="limitProgress"></i></div></div>
-            <div class="section-heading compact"><div><span class="eyebrow">REVOLUT POCKETS</span><h3>专项资金口袋</h3></div><span>账户内独立调拨</span></div>
+            <div class="section-heading compact"><div><h3>专项资金口袋</h3></div><span>账户内独立调拨</span></div>
             <div id="pocketGrid" class="pocket-grid"></div>
-            <div class="section-heading compact"><div><span class="eyebrow">DAG · SAGA TRANSACTION</span><h3>任务流转与补偿</h3></div><button id="simulateSaga" class="outline-button" type="button">模拟外部接口异常并演示 SAGA 自动回滚</button></div>
+            <div class="section-heading compact"><div><h3>任务流转与补偿</h3></div></div>
             <div id="sagaFlow" class="saga-flow">
               <article class="done" data-node="1"><em class="node-time">18ms</em><i>1</i><b>意图与风控预审</b><small>最近事务 · 风控通过</small></article><span class="flow-arrow active" aria-hidden="true"></span>
               <article class="done" data-node="2"><em class="node-time">45ms</em><i>2</i><b>专项口袋划拨</b><small>最近事务 · 资金已预留</small></article><span class="flow-arrow active" aria-hidden="true"></span>
@@ -126,14 +142,14 @@
               <article class="subpanel"><div class="subpanel-head"><h4>最近流水</h4><span id="transactionCount">0 笔</span></div><div id="transactionList" class="scroll-list"></div></article>
               <article class="subpanel"><div class="subpanel-head"><h4>异常交易</h4><span id="abnormalCount">0 项</span></div><div id="abnormalList" class="scroll-list"></div></article>
             </div>
-            <div class="section-heading compact"><div><span class="eyebrow">SUBSCRIPTION RADAR</span><h3>周期代扣与异常拦截</h3></div><span>风险协议可即时解除</span></div>
+            <div class="section-heading compact"><div><h3>周期代扣与异常拦截</h3></div><span>风险协议可即时解除</span></div>
             <div id="subscriptionList" class="subscription-list"></div>
           </section>
 
           <section id="tab-security" class="tab-pane" data-pane="security">
             <div class="section-heading"><div><span class="eyebrow">PORTFOLIO & CARDS</span><h3>银行卡与资产持仓</h3></div><span id="cardCount" class="soft-badge">0 张卡</span></div>
             <div id="cardDeck" class="card-deck"></div><div id="holdingList" class="holding-list"></div>
-            <div class="section-heading compact"><div><span class="eyebrow">SECURITY CORE</span><h3>SHA-256 账户安全态势与审计链</h3></div><div class="button-row"><button id="verifyChain" class="outline-button" type="button">校验全链完整性</button><button id="resetDemo" class="outline-button danger-outline" type="button">恢复初始数据</button></div></div>
+            <div class="section-heading compact"><div><h3>SHA-256 账户安全态势与审计链</h3></div><div class="button-row"><button id="verifyChain" class="outline-button" type="button">校验全链完整性</button></div></div>
             <div class="security-summary"><div class="score-ring"><strong id="riskScore">0</strong><span>/ 100</span></div><div><b>实时风险控制评分</b><p id="securityText">账户安全态势正在载入。</p></div><div class="security-metrics"><span>高危拦截<b id="blockedCount">0</b></span><span>连续失败<b id="failureCount">0</b></span></div></div>
             <div id="hashChain" class="hash-chain"></div>
           </section>
@@ -142,7 +158,7 @@
             <div class="section-heading"><div><span class="eyebrow">PREFERENCES</span><h3>系统与偏好设置</h3></div><div class="settings-head-actions"><span id="prefsSaveStatus">即时生效</span><button id="savePreferences" class="outline-button" type="button">保存偏好</button></div></div>
             <div class="settings-bento">
               <article class="bento-card">
-                <div class="bento-head"><span class="bento-icon">◌</span><div><span class="eyebrow">ACCESSIBILITY</span><h4>无障碍与全龄关怀</h4></div></div>
+                <div class="bento-head"><span class="bento-icon">◌</span><div><h4>无障碍与全龄关怀</h4></div></div>
                 <div class="setting-row"><div><b>长辈关怀模式</b><small>全局字号放大 25%，聊天记录保持连续</small></div><button id="elderToggleSetting" class="switch" type="button" role="switch" aria-checked="false"><i></i></button></div>
                 <div class="setting-row"><div><b>自动语音播报</b><small>助理回复后温和播报重点</small></div><button id="ttsToggle" class="switch" type="button" role="switch" aria-checked="false"><i></i></button></div>
                 <div class="setting-block voice-settings"><div><b>语音管家音色</b><small id="voiceEngineHint">正在检索 Neural 自然语音…</small></div>
@@ -157,13 +173,16 @@
                 <div class="setting-block"><div><b>语速调节</b><small id="ttsRateLabel">标准语速</small></div><input id="ttsRate" class="range" type="range" min="0.7" max="1.3" step="0.1" value="1"></div>
               </article>
               <article class="bento-card">
-                <div class="bento-head"><span class="bento-icon">⌁</span><div><span class="eyebrow">INTERACTION & LIMITS</span><h4>交互体验与风控阈值</h4></div></div>
+                <div class="bento-head"><span class="bento-icon">⌁</span><div><h4>交互体验与风控阈值</h4></div></div>
                 <div class="setting-row"><div><b>操作微音效</b><small>提交、校验与任务完成提示</small></div><button id="soundToggle" class="switch" type="button" role="switch" aria-checked="true"><i></i></button></div>
                 <div class="setting-block"><div><b>默认图表类型</b><small>进入统计视图时自动应用</small></div><div class="segmented-small" id="defaultChart"><button class="active" type="button" data-value="line">折线</button><button type="button" data-value="bar">柱状</button><button type="button" data-value="doughnut">环形</button></div></div>
                 <div class="setting-block"><div><b>单日风控限额</b><small id="riskLimitLabel">¥1,000.00</small></div><input id="riskLimit" class="range" type="range" min="500" max="5000" step="500" value="1000"></div>
               </article>
             </div>
-            <section class="engine-console bento-wide">
+            <details id="demoTools" class="demo-tools" hidden>
+              <summary>演示工具</summary>
+              <div class="demo-tools-body">
+              <section class="engine-console bento-wide">
               <div class="engine-console-head"><div><span class="eyebrow">AI ENGINE ROUTING CONSOLE</span><h3>AI 引擎路由控制台</h3></div><span id="latencyBadge" class="latency-badge">检测中</span></div>
               <div class="engine-mode-switch" role="radiogroup" aria-label="AI 引擎模式">
                 <button type="button" class="active" data-engine-mode="cloud" role="radio" aria-checked="true">⚡ 云端大模型实时推理 <small>推荐</small></button>
@@ -177,7 +196,13 @@
                 <label>智谱 / OpenAI 兼容 API Key<input id="directApiKey" type="password" autocomplete="off" placeholder="sk-...（仅当前标签页有效）"></label>
                 <div class="button-row"><button id="saveDirectKey" class="outline-button" type="button">启用备用直连</button><button id="clearDirectKey" class="outline-button" type="button">清除密钥</button></div>
               </details>
-            </section>
+              </section>
+              <div class="demo-tool-actions">
+                <button id="simulateSaga" class="outline-button" type="button">模拟外部接口异常并演示 SAGA 回滚</button>
+                <button id="resetDemo" class="outline-button danger-outline" type="button">恢复初始数据</button>
+              </div>
+              </div>
+            </details>
           </section>
         </div>
       </section>
@@ -185,7 +210,7 @@
   </div>
 
   <div id="modalBackdrop" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-    <div class="modal-card"><header><div><span class="eyebrow" id="modalKicker">SECURE ACTION</span><h2 id="modalTitle">安全确认</h2><p id="modalSubtitle"></p></div><button id="modalClose" class="icon-button" type="button" aria-label="关闭">×</button></header><div id="modalBody" class="modal-body"></div><footer id="modalActions" class="modal-actions"></footer></div>
+    <div class="modal-card"><header><div><span class="dialog-kicker" id="modalKicker">安全确认</span><h2 id="modalTitle">安全确认</h2><p id="modalSubtitle"></p></div><button id="modalClose" class="icon-button" type="button" aria-label="关闭">×</button></header><div id="modalBody" class="modal-body"></div><footer id="modalActions" class="modal-actions"></footer></div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script>

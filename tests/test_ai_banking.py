@@ -73,7 +73,7 @@ def test_actions_mutate_balances_subscriptions_and_cards(seeded_db):
     balance_before_redeem = database.fetch_all("SELECT balance FROM accounts WHERE user_id='U2001'")[0]["balance"]
     redeemed = execute_action(
         "U2001",
-        {"action": "redeem_wealth", "params": {"product_name": "微众活期+朝朝宝", "amount": 1000}},
+        {"action": "redeem_wealth", "params": {"product_name": "活期+日日享", "amount": 1000}},
         level="L2",
     )
     assert redeemed["status"] == "success"

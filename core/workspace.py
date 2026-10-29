@@ -166,6 +166,14 @@ def ensure_workspace_schema(db_path: str | Path | None = None) -> Path:
                 connection.execute("ALTER TABLE app_sessions ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
             _seed_zhangjg(connection)
             _seed_linyan(connection)
+            connection.execute(
+                "UPDATE wealth_products SET name=? WHERE product_id='PROD_01' AND name<>?",
+                ("活期+日日享", "活期+日日享"),
+            )
+            connection.execute(
+                "UPDATE wealth_products SET name=? WHERE product_id='PROD_02' AND name<>?",
+                ("稳健理财季季盈", "稳健理财季季盈"),
+            )
             connection.executemany(
                 "INSERT OR IGNORE INTO transactions "
                 "(transaction_id,user_id,account_id,occurred_at,direction,category,merchant,amount,balance_after,channel,is_abnormal,abnormal_reason,status,remark) "
