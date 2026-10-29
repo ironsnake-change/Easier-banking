@@ -1,0 +1,14 @@
+{
+  "envId": "YOUR_ENV_ID",
+  "functionRoot": "./",
+  "functions": [
+    {
+      "name": "chat-proxy",
+      "type": "HTTP",
+      "runtime": "Nodejs18.15",
+      "timeout": 20,
+      "memorySize": 256,
+      "installDependency": true
+    }
+  ]
+}

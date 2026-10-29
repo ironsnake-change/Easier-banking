@@ -190,12 +190,6 @@
               </div>
               <div class="engine-monitor"><div class="engine-orbit"><i></i><i></i><i></i><span>AI</span></div><div><b id="enginePrimary">腾讯云 CloudBase 上海节点 · glm-4-flash</b><p id="engineMonitor">正在检测安全链路。</p><small id="engineFallback">三级容灾就绪：Tencent Gateway → DeepSeek/Relay → Local Rule Fallback</small></div></div>
               <div class="engine-console-actions"><button id="probeGateway" class="outline-button" type="button">🔄 立即探测网关延迟</button><span id="probeResult">等待首次探测</span></div>
-              <details class="direct-config">
-                <summary>🔑 备用直连配置</summary>
-                <p>仅用于浏览器无法访问 Python 后端时的原生智谱通道。密钥只保存在当前浏览器会话，不写入项目文件。</p>
-                <label>智谱 / OpenAI 兼容 API Key<input id="directApiKey" type="password" autocomplete="off" placeholder="sk-...（仅当前标签页有效）"></label>
-                <div class="button-row"><button id="saveDirectKey" class="outline-button" type="button">启用备用直连</button><button id="clearDirectKey" class="outline-button" type="button">清除密钥</button></div>
-              </details>
               </section>
               <div class="demo-tool-actions">
                 <button id="simulateSaga" class="outline-button" type="button">模拟外部接口异常并演示 SAGA 回滚</button>

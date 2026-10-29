@@ -8,7 +8,6 @@
   var ENGINE_MODE_KEY = "easier_banking_engine_mode_v1";
   var ELDER_DEMO_NAME = "\u5f20\u5efa\u56fd";
   var VOICE_GENDER_KEY = "easier_banking_voice_gender_v1";
-  var DIRECT_KEY = "eb_direct_api_key";
   var DEMO_PASSWORD = "Demo@2026";
   var API_TIMEOUT = 2500;
   var currentTab = "overview";
@@ -2007,7 +2006,7 @@
           if (action === "redeem") {
             await runSensitiveAction({ action: "redeem_wealth", params: { product_name: holding.product_name, amount: amount } }, "理财快速赎回", "确认将理财持仓赎回至活期账户。");
           } else {
-            await runSensitiveAction({ action: "subscribe_wealth", params: { product_name: holding.product_name, amount: amount } }, "理财申购追加", "追加申购涉及资金划转，需要 L2 授权确认。");
+            await runSensitiveAction({ action: "subscribe_wealth", params: { product_name: holding.product_name, amount: amount } }, "理财申购追加", "追加申购涉及资金划转，需要确认并按风险等级完成强验证。");
           }
         } }
       ]
@@ -3282,18 +3281,6 @@
       button.onclick = function () { setEngineMode(button.getAttribute("data-engine-mode")); };
     });
     if (byId("probeGateway")) byId("probeGateway").onclick = activateCloudProbe;
-    if (byId("saveDirectKey")) byId("saveDirectKey").onclick = function () {
-      var key = byId("directApiKey") ? byId("directApiKey").value.trim() : "";
-      if (!key) { toast("请输入有效的备用 API Key。"); return; }
-      sessionSet(DIRECT_KEY, key);
-      toast("备用直连密钥已写入当前浏览器会话，刷新页面后自动清除。");
-      probeEngine();
-    };
-    if (byId("clearDirectKey")) byId("clearDirectKey").onclick = function () {
-      sessionSet(DIRECT_KEY, "");
-      if (byId("directApiKey")) byId("directApiKey").value = "";
-      toast("备用直连密钥已清除。");
-    };
     all("[data-voice-gender]").forEach(function (button) {
       button.onclick = function () {
         savedVoiceGender = button.getAttribute("data-voice-gender") === "male" ? "male" : "female";
@@ -3392,7 +3379,6 @@
     bindAuth();
     bindActions();
     loadPublicConfig();
-    if (byId("directApiKey")) byId("directApiKey").value = sessionGet(DIRECT_KEY);
     renderEngine();
     renderVoiceSettings();
     setAuthTab("login");

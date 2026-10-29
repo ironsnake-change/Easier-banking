@@ -1,0 +1,14 @@
+{
+  "name": "easier-banking-chat-proxy",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Restricted OpenAI-compatible proxy for the Easier-banking CloudBase deployment",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js"
+  }
+}

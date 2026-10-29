@@ -522,13 +522,6 @@ svg { display: block; }
 .engine-monitor small { display: block; margin-top: 5px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .engine-console-actions { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
 .engine-console-actions span { color: var(--muted); font-size: 12px; }
-.direct-config { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; }
-.direct-config summary { cursor: pointer; color: var(--ink-soft); font-weight: 700; }
-.direct-config p { margin: 8px 0; line-height: 1.65; }
-.direct-config label { display: grid; gap: 5px; }
-.direct-config input { height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 12px; }
-.direct-config .button-row { margin-top: 7px; }
-
 .in-chat-auth {
   margin-top: 8px;
   padding: 12px;
@@ -869,7 +862,7 @@ button, input, textarea { font-size: 14px; }
 .engine-orbit { display: none; }
 .engine-monitor { grid-template-columns: 1fr; }
 .engine-monitor b { font-size: 14px; }
-.engine-monitor p, .engine-monitor small, .engine-console-actions, .direct-config p { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.engine-monitor p, .engine-monitor small, .engine-console-actions { color: var(--muted); font-size: 12px; line-height: 1.55; }
 .latency-badge { color: var(--muted); font-size: 12px; }
 .cloud-pill { font-size: 12px; }
 .in-chat-auth { border-color: var(--line); background: var(--panel-raised); }
@@ -896,7 +889,7 @@ input, textarea, select, button { font-variant-numeric: tabular-nums; }
 #riskLimitLabel, .voice-pills button, .engine-monitor b, .engine-monitor p,
 .engine-orbit span, .latency-badge, .engine-mode-switch button,
 .engine-mode-switch button small, .engine-monitor small, .engine-console-actions span,
-.direct-config, .direct-config input, .auth-card-head b, .auth-card-head span,
+.auth-card-head b, .auth-card-head span,
 .auth-card-grid small, .auth-card-grid b, .auth-card-actions button,
 .proposal-reasons span, .otp-field, .otp-field small, .auth-card-result,
 .business-done, .bank-card .card-tools button, .card-status-frozen,

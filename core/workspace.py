@@ -166,6 +166,14 @@ def ensure_workspace_schema(db_path: str | Path | None = None) -> Path:
                 connection.execute("ALTER TABLE app_sessions ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
             _seed_zhangjg(connection)
             _seed_linyan(connection)
+            # Competition baseline: every persona starts from the same 1000 CNY
+            # daily threshold. This only shrinks the legacy elder demo value and
+            # never blocks a separately approved L3 limit override.
+            connection.execute(
+                "UPDATE user_preferences SET transfer_threshold=1000.0 "
+                "WHERE transfer_threshold=2000.0 AND user_id IN "
+                "(SELECT user_id FROM auth_accounts WHERE account_type='elder')"
+            )
             connection.execute(
                 "UPDATE wealth_products SET name=? WHERE product_id='PROD_01' AND name<>?",
                 ("活期+日日享", "活期+日日享"),
@@ -216,7 +224,7 @@ def _insert_preference(connection: sqlite3.Connection, user_id: str, elder: bool
         "INSERT OR IGNORE INTO user_preferences "
         "(user_id,chart_type,elder_mode,tts_rate,sound_enabled,auto_read,transfer_threshold,engine_mode) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        (user_id, "line", int(elder), 1.0, 1, int(elder), 2000.0 if elder else 1000.0, "auto"),
+        (user_id, "line", int(elder), 1.0, 1, int(elder), 1000.0, "auto"),
     )
 
 

@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from core import database, workspace
+from core import database, policy, workspace
 from main import app
 
 
@@ -53,3 +53,36 @@ def test_elder_transfer_requires_confirmation_and_updates_ledger_once(client):
     assert database.fetch_all(
         "SELECT COUNT(*) AS count FROM transactions WHERE user_id='U1001' AND merchant LIKE '%许小宝%'"
     )[0]["count"] == 1
+
+
+def test_elder_daily_transfer_limit_uses_universal_1000_threshold(client):
+    login = client.post(
+        "/api/auth/login",
+        json={"username_or_card": "zhangjg", "password": workspace.DEMO_PASSWORD},
+    )
+    assert login.status_code == 200, login.text
+
+    preference = database.fetch_all(
+        "SELECT transfer_threshold FROM user_preferences WHERE user_id='U1001'"
+    )[0]
+    assert preference["transfer_threshold"] == 1000.0
+    assert policy.effective_daily_limit("U1001") == 1000.0
+    classified = policy.classify(
+        "U1001",
+        {"action": "transfer", "params": {"recipient": "大孙子", "amount": 700}},
+    )
+    assert classified["level"] == "L3"
+
+
+def test_wealth_purchase_and_large_redemption_require_l3(client):
+    purchase = policy.classify(
+        "U2001",
+        {"action": "subscribe_wealth", "params": {"product_name": "活期+日日享", "amount": 1000}},
+    )
+    large_redemption = policy.classify(
+        "U2001",
+        {"action": "redeem_wealth", "params": {"product_name": "活期+日日享", "amount": 1000.01}},
+    )
+    assert purchase["level"] == "L3"
+    assert "otp" in purchase["requires"]
+    assert large_redemption["level"] == "L3"

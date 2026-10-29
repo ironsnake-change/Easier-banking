@@ -341,14 +341,18 @@ def classify(user_id: str, action: dict[str, Any] | None) -> dict[str, Any]:
             return {"level": "L3", "requires": ["confirmation", "otp"], "reasons": [f"单日风控限额将从 {base:.2f} 元调高至 {value:.2f} 元"]}
         return {"level": "L2", "requires": ["confirmation"], "reasons": ["单日风控限额调整不会突破当前风险边界"]}
 
-    if name in {"cancel_subscription", "restore_subscription", "subscribe_service", "manage_pocket", "subscribe_wealth", "redeem_wealth"}:
+    if name == "subscribe_wealth":
+        return {"level": "L3", "requires": ["confirmation", "otp"], "reasons": ["理财产品申购属于高风险资金与适当性操作"]}
+    if name == "redeem_wealth":
+        if _money(params.get("amount")) > config.DAILY_SMALL_TRANSFER_LIMIT:
+            return {"level": "L3", "requires": ["confirmation", "otp"], "reasons": ["大额理财赎回会显著改变持仓与活期余额"]}
+        return {"level": "L2", "requires": ["confirmation"], "reasons": ["小额理财赎回需要确认"]}
+    if name in {"cancel_subscription", "restore_subscription", "subscribe_service", "manage_pocket"}:
         labels = {
             "cancel_subscription": "取消订阅会改变第三方扣款授权",
             "restore_subscription": "恢复订阅会重新建立第三方扣款授权",
             "subscribe_service": "新增订阅会建立持续扣款授权",
             "manage_pocket": "专项资金划拨会改变可用余额与锁定资金",
-            "subscribe_wealth": "理财申购涉及风险适当性与资金划转",
-            "redeem_wealth": "理财赎回会改变持仓与活期余额",
         }
         return {"level": "L2", "requires": ["confirmation"], "reasons": [labels[name]]}
 
@@ -844,8 +848,12 @@ def classify_tool(user_id: str, tool_name: str, arguments: dict[str, Any] | None
         }})
     if tool_name == "create_lifestyle_order":
         return {"level": "L2", "requires": ["confirmation"], "reasons": ["生活服务订单会占用或划转资金"]}
-    if tool_name in {"subscribe_wealth_product", "redeem_wealth_product", "apply_virtual_card"}:
-        return {"level": "L2", "requires": ["confirmation"], "reasons": ["理财或虚拟卡业务会改变账户风险边界"]}
+    if tool_name == "subscribe_wealth_product":
+        return {"level": "L3", "requires": ["confirmation", "otp"], "reasons": ["理财产品申购需要高风险强验证"]}
+    if tool_name == "redeem_wealth_product":
+        return classify(user_id, {"action": "redeem_wealth", "params": {"product_name": args.get("holding_id_or_product_id", ""), "amount": args.get("amount", 0)}})
+    if tool_name == "apply_virtual_card":
+        return {"level": "L2", "requires": ["confirmation"], "reasons": ["虚拟卡申请会改变账户风险边界"]}
     return None
 
 

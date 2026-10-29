@@ -46,6 +46,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build_desktop.ps1
 
 ## 环境变量
 
+### CloudBase 网关（可选）
+
+云端网关源码位于 `gateway/`。它在 CloudBase 中把 OpenAI 兼容请求转发到智谱，并强制锁定模型。部署时必须在目标函数的“环境变量”中配置：
+
+```text
+ZHIPU_API_KEY=<智谱控制台生成的新 Key>
+APP_SECRET=<与 Agent 的 EASIER_BANKING_GATEWAY_APP_SECRET 一致>
+```
+
+将函数执行超时设置为至少 20 秒，并把 HTTP 访问服务路径映射为 `/chat/completions`。不要把这些值写入 `.env.example`、页面或 Git。详细步骤见 `gateway/README.md`。
+
 - `DEMO_MODE=1`：评委演示默认模式。只有该值启用时，提案响应中的 `demo_hint` 才会返回本次一次性验证码，界面显示“演示模式：验证码见提示”。生产环境必须设为 `0` 并接入真实短信、语音或验证器通道。
 - `OTP_PEPPER`：一次性验证码哈希的服务端密钥；生产环境必须显式设置并妥善保管。
 - `ACTION_PROPOSAL_TTL_SECONDS`：授权提案有效期，默认 120 秒。
@@ -133,3 +144,5 @@ POST /api/assistant/confirm
 ```bash
 python -m pytest -q
 ```
+
+当前基线：`117 passed`。覆盖两阶段授权、并发防重、OTP、临时额度、会话与登录限流、网关熔断、沙箱工具、合规边界、六场景工具及桌面启动器。

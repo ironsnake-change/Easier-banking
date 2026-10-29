@@ -173,6 +173,11 @@ def test_authorization_otp_and_message_contracts_remain_available():
     assert "background: var(--panel-raised)" in STYLES[STYLES.index(user_bubble_rule):STYLES.index(user_bubble_rule) + 180]
 
 
+def test_browser_never_accepts_or_stores_a_direct_model_key():
+    assert "directApiKey" not in INDEX
+    assert "eb_direct_api_key" not in APP
+
+
 def _png_dimensions(path: Path) -> tuple[int, int]:
     payload = path.read_bytes()
     assert payload[:8] == b"\x89PNG\r\n\x1a\n"
