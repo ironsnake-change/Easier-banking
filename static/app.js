@@ -1217,10 +1217,8 @@
         timeout: 8000,
         body: JSON.stringify({ reason: "用户在工作台主动请求人工客服接管" })
       });
-      appendAssistantMessage(
-        result.summary + " 工单号：" + result.ticket_id + "。请勿继续向陌生人转账或提供验证码。",
-        { support_ticket: result.ticket_id }
-      );
+      if (result.live_state) state.data = normalizeState(result.live_state);
+      else appendAssistantMessage(result.summary + " 工单号：" + result.ticket_id + "。", { support_ticket: result.ticket_id });
       renderAll();
       toast("人工工单已建立：" + result.ticket_id);
     } catch (error) {

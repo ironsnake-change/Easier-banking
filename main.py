@@ -691,12 +691,20 @@ def support_handover(
         {"ticket_id": ticket["ticket_id"], "reason": request.reason},
         "OPEN",
     )
+    summary = "人工接管工单已建立，账户上下文与最近对话已一并提交。"
+    workspace.append_chat_message(
+        user_id,
+        "assistant",
+        f"{summary} 工单号：{ticket['ticket_id']}。人工专员将根据本次会话继续处理。",
+        {"support_ticket": ticket["ticket_id"]},
+    )
     return {
         "status": "success",
         "ticket_id": ticket["ticket_id"],
         "ticket_status": ticket["status"],
         "created_at": ticket["created_at"],
-        "summary": "人工接管工单已建立，账户上下文与最近对话已一并提交。",
+        "summary": summary,
+        "live_state": build_live_state(user_id),
     }
 
 

@@ -30,6 +30,10 @@ def test_authenticated_handover_persists_context_and_audit(tmp_path, monkeypatch
         assert stored[0]["user_id"] == "U2001"
         assert stored[0]["status"] == "OPEN"
         assert "recent_messages" in stored[0]["snapshot_json"]
+        assert any(
+            payload["ticket_id"] in str(message.get("content"))
+            for message in payload["live_state"]["chat_messages"]
+        )
     logs = database.fetch_all(
         "SELECT event_type,status FROM audit_logs WHERE event_type='HUMAN_HANDOVER_CREATED'"
     )
