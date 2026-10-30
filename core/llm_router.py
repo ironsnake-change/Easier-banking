@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from core import config
+from core.ai_banking import _amount_from_text
 from core.gateway_guard import cloud_guard
 from core.privacy import redact_sensitive_text
 
@@ -141,7 +142,10 @@ class LLMRouter:
         match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)\s*(?:元|块)", text)
         if not match:
             match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)", text)
-        return float(match.group(1).replace(",", "")) if match else default
+        if match:
+            return float(match.group(1).replace(",", ""))
+        parsed = _amount_from_text(text)
+        return parsed if parsed > 0 else default
 
     @staticmethod
     def _contact(text: str) -> str:
@@ -168,7 +172,7 @@ class LLMRouter:
         lock_requested = "锁定" in msg or "冻结" in msg or bool(
             re.search(r"锁(?:住|上|定)?\s*(?:\d|[一二两三四五六七八九十百千万])", msg)
         )
-        order_requested = any(word in msg for word in ("订单", "预订", "机票", "鲜花", "蛋糕"))
+        order_requested = any(word in msg for word in ("订单", "预订", "预定", "机票", "鲜花", "蛋糕"))
         if lock_requested and order_requested and amount is not None:
             values = [
                 float(x.replace(",", ""))

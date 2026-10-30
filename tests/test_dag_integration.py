@@ -29,7 +29,7 @@ def test_assistant_chat_routes_compound_request_into_real_dag(tmp_path, monkeypa
             "/api/assistant/chat",
             headers={"X-Session-Token": login.json()["session_token"]},
             json={
-                "message": "下个月15号是我爱人生日，帮我先锁1000块钱活期，再预订鲜花和蛋糕",
+                "message": "下个月十五号是我的爱人的生日，先锁一千元，再预定鲜花跟蛋糕",
                 "force_local_fallback": True,
             },
         )
@@ -40,6 +40,7 @@ def test_assistant_chat_routes_compound_request_into_real_dag(tmp_path, monkeypa
         assert payload["pending_interaction"]["dag_id"] == payload["dag"]["dag_id"]
         assert payload["pending_interaction"]["risk_level"] in {"YELLOW", "RED"}
         assert [node["risk_level"] for node in payload["dag"]["nodes"]] == ["GREEN", "YELLOW", "YELLOW"]
+        assert not any(word in payload["reply_text"] for word in ("card_control", "<bank_action>", '"card_tail"'))
 
         headers = {"X-Session-Token": login.json()["session_token"]}
         current = payload

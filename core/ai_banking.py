@@ -319,6 +319,20 @@ def _extract_json_action(content: str) -> tuple[dict[str, Any] | None, str]:
                     visible = (visible[:first] + visible[last + 1:]).strip()
             except json.JSONDecodeError:
                 pass
+    raw_action = re.search(
+        r"\b(cancel_subscription|restore_subscription|subscribe_service|transfer|manage_pocket|card_control|subscribe_wealth|redeem_wealth)\b\s*(\{.*?\})",
+        visible,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if action is None and raw_action:
+        try:
+            params = json.loads(raw_action.group(2))
+            if isinstance(params, dict):
+                action = {"action": raw_action.group(1).lower(), "params": params}
+        except json.JSONDecodeError:
+            action = None
+    if raw_action:
+        visible = (visible[:raw_action.start()] + visible[raw_action.end():]).strip()
     visible = re.sub(r"</?bank_action>", "", visible, flags=re.IGNORECASE).strip()
     return action, visible
 

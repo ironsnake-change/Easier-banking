@@ -183,7 +183,7 @@ class BankingAgent:
                            "step_id": node.step_id, "tool_name": node.tool_name, "risk_level": node.risk_level,
                            "risk_reason": gate.get("risk_reason", "需要授权"), "require_mfa": node.risk_level == "RED",
                            "arguments": node.arguments, "demo_hint": gate.get("demo_hint")}
-                text = "；".join(filter(None, summaries + [gate.get("confirmation_prompt", "请确认本次操作。")]))
+                text = " ".join(filter(None, summaries + [gate.get("confirmation_prompt", "请确认本次操作。")]))
                 return self._response(task, task.overall_status, text, elder_mode, pending)
             node.status = "FAILED"
             task.overall_status = "BLOCKED_BY_SECURITY"
@@ -191,7 +191,7 @@ class BankingAgent:
             return self._response(task, "BLOCKED_BY_SECURITY", gate.get("summary", "安全策略已拦截该操作。"), elder_mode)
         task.overall_status = "COMPLETED"
         _persist(task)
-        reply = "；".join(filter(None, summaries)) or "已完成处理。"
+        reply = " ".join(filter(None, summaries)) or "已完成处理。"
         grounding = {"passed": True, "unverified_numbers": [], "grounded_numbers": all_numbers}
         return self._response(task, "COMPLETED", reply, elder_mode, grounding=grounding)
 

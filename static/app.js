@@ -854,6 +854,7 @@
         } catch (error) {}
       }
     }
+    text = text.replace(/\b(?:cancel_subscription|restore_subscription|subscribe_service|transfer|manage_pocket|card_control|subscribe_wealth|redeem_wealth)\b\s*\{[\s\S]*?\}/gi, "").trim();
     return { text: text.replace(/<\/?bank_action>/gi, "").trim(), action: action };
   }
 

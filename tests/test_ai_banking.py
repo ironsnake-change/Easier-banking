@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from core import database, workspace
-from core.ai_banking import authorization_level, execute_action, infer_action
+from core.ai_banking import _extract_json_action, authorization_level, execute_action, infer_action
 from main import _tts_summary
 
 
@@ -92,3 +92,14 @@ def test_voice_summary_is_a_short_grounded_brief(seeded_db):
     assert "总支出" in summary
     assert "尾号8848" in summary
     assert "SHA-256" not in summary
+
+
+def test_raw_tool_json_is_parsed_and_removed_from_visible_text():
+    action, visible = _extract_json_action(
+        '已选择您的智享金卡进行操作。\ncard_control {"card_tail":"8848","operation":"adjust_limit","value":1000}'
+    )
+    assert action == {
+        "action": "card_control",
+        "params": {"card_tail": "8848", "operation": "adjust_limit", "value": 1000},
+    }
+    assert visible == "已选择您的智享金卡进行操作。"

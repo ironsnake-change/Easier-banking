@@ -511,7 +511,7 @@ def _is_multi_step_dag_request(message: str) -> bool:
     lock_requested = "锁定" in text or "冻结" in text or bool(
         re.search(r"锁(?:住|上|定)?\s*(?:\d|[一二两三四五六七八九十百千万])", text)
     )
-    order_requested = any(word in text for word in ("订单", "预订", "机票", "鲜花", "蛋糕", "旅游"))
+    order_requested = any(word in text for word in ("订单", "预订", "预定", "机票", "鲜花", "蛋糕", "旅游"))
     return lock_requested and order_requested
 
 
