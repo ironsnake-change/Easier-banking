@@ -37,6 +37,7 @@ def test_assistant_chat_routes_compound_request_into_real_dag(tmp_path, monkeypa
         payload = response.json()
         assert payload["dag"]["dag_id"].startswith("DAG-")
         assert len(payload["dag"]["nodes"]) >= 3
+        assert payload["dag"]["nodes"][1]["arguments"]["amount"] == 1000.0
         assert payload["pending_interaction"]["dag_id"] == payload["dag"]["dag_id"]
         assert payload["pending_interaction"]["risk_level"] in {"YELLOW", "RED"}
         assert [node["risk_level"] for node in payload["dag"]["nodes"]] == ["GREEN", "YELLOW", "YELLOW"]

@@ -144,6 +144,11 @@ class LLMRouter:
             match = re.search(r"(?<!\d)(\d[\d,]*(?:\.\d{1,2})?)", text)
         if match:
             return float(match.group(1).replace(",", ""))
+        chinese_money = re.search(r"([零〇一二两三四五六七八九十百千万亿]+)\s*(?:元|块)", text)
+        if chinese_money:
+            parsed = _amount_from_text(chinese_money.group(0))
+            if parsed > 0:
+                return parsed
         parsed = _amount_from_text(text)
         return parsed if parsed > 0 else default
 
