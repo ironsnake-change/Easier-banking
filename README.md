@@ -2,6 +2,31 @@
 
 Easier-banking 是面向个人与家庭金融场景的银行 AI 智能体。用户可以用自然语言查询账户、分析账单、转账、管理银行卡、处理订阅代扣，或把资金锁定到专项口袋。系统把“模型理解”和“资金执行”分开，所有写操作都必须经过服务端风险分级、确认卡、一次性验证码和原子提案状态机。
 
+<p align="center">
+  <img src="docs/screenshots/1366x768-dark-overview.png" alt="Easier-banking 工作台" width="880">
+</p>
+
+<p align="center">
+  <b>自然语言下达指令 → 服务端风险分级 → 确认卡 / OTP → 原子提案执行 → DAG/Saga 补偿</b><br>
+  <sub>模型只负责理解意图，资金动作一律由服务端策略判定，客户端传 <code>confirmed=true</code> 不构成授权。</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/crop-l1-authorization.png" alt="L1 保护性操作：一键确认"></td>
+    <td width="50%"><img src="docs/screenshots/crop-l3-otp.png" alt="L3 风险扩张：确认卡 + 一次性验证码"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>L1 保护性操作</b> · 一键确认即时生效</sub></td>
+    <td align="center"><sub><b>L3 风险扩张</b> · 确认卡 + 一次性验证码</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/crop-dag.png" alt="DAG 节点授权" width="680"><br>
+  <sub>跨场景复合指令进入真实 DAG：逐节点授权，取消时已提交节点逆序补偿回滚。</sub>
+</p>
+
 ## 核心能力
 
 - 智能转账：联系人解析、重名消歧、中文金额、额度校验、反诈拦截与 Saga 补偿。
