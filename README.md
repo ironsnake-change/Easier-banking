@@ -52,8 +52,16 @@ AI 聊天不会直接执行写操作，而是生成 `action_proposals` 提案。
 
 环境要求：Python 3.11 或更高版本。项目使用 SQLite，无需 Docker 或外部数据库。
 
+先克隆仓库（也可以直接下载 ZIP 解压）：
+
 ```powershell
+git clone https://github.com/ironsnake-change/Easier-banking.git
 cd Easier-banking
+```
+
+然后在项目根目录创建虚拟环境并启动：
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
@@ -73,7 +81,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 
 ## Windows 桌面版
 
-主目录中的 `Easier-banking_桌面版.exe` 是单文件 Windows 应用，双击即启动：
+桌面版是单文件 Windows 应用，双击即启动（可在 [Releases](https://github.com/ironsnake-change/Easier-banking/releases) 下载，或从源码运行 `build_desktop.ps1` 自行构建）：
 
 - 自动启动本地 FastAPI 服务，并打开 Edge/Chrome 独立应用窗口。
 - 运行时不需要安装 Python、Node.js、Docker 或数据库。
@@ -81,7 +89,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 - 日志保存在 `%LOCALAPPDATA%\Easier-banking\desktop.log`。
 - 浏览器窗口关闭后，本地服务同步退出。
 
-桌面版未做商业代码签名，Windows 首次运行可能显示 SmartScreen。请核对随附的 SHA-256 文件后选择“更多信息 -> 仍要运行”。
+桌面版未做商业代码签名，Windows 首次运行可能显示 SmartScreen。请核对下载附带的 SHA-256 后选择“更多信息 -> 仍要运行”。
 
 ## 模型与网关
 
