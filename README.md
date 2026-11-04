@@ -81,7 +81,15 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 
 ## Windows 桌面版
 
-桌面版是单文件 Windows 应用，双击即启动（可在 [Releases](https://github.com/ironsnake-change/Easier-banking/releases) 下载，或从源码运行 `build_desktop.ps1` 自行构建）：
+桌面版是单文件 Windows 应用，双击即启动。下载地址：
+
+- [Easier-banking_Desktop.exe](https://github.com/ironsnake-change/Easier-banking/releases/download/v0.4-desktop/Easier-banking_Desktop.exe)（23 MB，单文件）
+- [Windows-x64 压缩包](https://github.com/ironsnake-change/Easier-banking/releases/download/v0.4-desktop/Easier-banking_Desktop_Windows-x64.zip)（23 MB）
+- [SHA256SUMS.txt](https://github.com/ironsnake-change/Easier-banking/releases/download/v0.4-desktop/SHA256SUMS.txt)（校验值）
+
+也可以从源码运行 `build_desktop.ps1` 自行构建。
+
+启动后：
 
 - 自动启动本地 FastAPI 服务，并打开 Edge/Chrome 独立应用窗口。
 - 运行时不需要安装 Python、Node.js、Docker 或数据库。
