@@ -1,158 +1,141 @@
-# Easier-banking
+# Easier-banking 银行 AI 智能体
 
-面向个人与家庭场景的银行 AI 智能体工作台。项目采用单仓库结构，默认使用 Python 内置 SQLite，无需额外数据库或容器。
+Easier-banking 是面向个人与家庭金融场景的银行 AI 智能体。用户可以用自然语言查询账户、分析账单、转账、管理银行卡、处理订阅代扣，或把资金锁定到专项口袋。系统把“模型理解”和“资金执行”分开，所有写操作都必须经过服务端风险分级、确认卡、一次性验证码和原子提案状态机。
 
-## 本地运行
+## 核心能力
 
-1. 安装 Python 3.11 或更高版本。
-2. 创建虚拟环境并安装依赖：
+- 智能转账：联系人解析、重名消歧、中文金额、额度校验、反诈拦截与 Saga 补偿。
+- 账单分析：收支趋势、分类统计、异常交易识别、月度与年度分析。
+- 理财操作：产品比较、R1-R4 风险适配、申购、赎回、收益与持仓展示。
+- 卡片管理：冻结、解冻、境外锁、夜间锁、免密代扣总闸、ATM 保护与限额。
+- 订阅代扣：自动扫描、续费提醒、退订、恢复订阅、未知订阅拒绝伪造。
+- 跨场景联动：专项资金口袋、生活服务订单、AA 分账、定时任务和 DAG 编排。
+- 全龄适配：标准网银与长辈关怀模式；大字号、温和话术和语音播报。
+- 交易追溯：电子回单、中文大写金额、SHA-256 哈希签名和四阶段执行时间轴。
 
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
+## 权限分级
 
-3. 启动服务：
+- L1 保护性开启：冻结卡片、开启境外/夜间/免密代扣/ATM 锁，只需一键确认。
+- L2 常规资金动作：额度内已登记收款人转账、退订、口袋划拨、小额理财赎回，需要确认卡。
+- L3 风险扩张：超额转账、临时提额、首次陌生收款人、解冻、关闭安全锁、提高限额、理财申购和大额赎回，需要确认卡和一次性 OTP。
 
-   ```bash
-   python -m uvicorn main:app --host 127.0.0.1 --port 8000
-   ```
+AI 聊天不会直接执行写操作，而是生成 `action_proposals` 提案。确认令牌和参数分别哈希保存；确认接口使用单条条件 `UPDATE` 抢占，只有 `rowcount=1` 的请求能执行，因此并发点击不会重复扣款。
 
-4. 浏览器访问 `http://127.0.0.1:8000`。数据库会在首次启动时自动创建并写入演示数据。
+跨场景复合指令会进入真实 DAG：先执行只读账户核验，再逐节点处理专项资金锁定和外部生活服务订单。每个节点都调用统一风险策略，前端按顺序展示授权卡并刷新 DAG/SAGA 状态；取消后续节点时，已提交节点会逆序补偿回滚。
 
-应用会使用 Python 标准库自动读取项目根目录的 `.env`（若存在），进程环境变量优先。可参考 `.env.example`；其默认 `DEMO_MODE=1`，评委克隆后无需申请或配置任何大模型 Key。启动日志会明确打印当前 `demo_mode`、`gateway_mode` 与会话有效期。
+## 快速启动
+
+环境要求：Python 3.11 或更高版本。项目使用 SQLite，无需 Docker 或外部数据库。
+
+```powershell
+cd Easier-banking
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+打开 http://127.0.0.1:8000 。首次启动会自动创建数据库并载入演示数据。
+
+不要直接双击项目内的 `static/index.html`。该方式没有后端服务，系统会按安全策略进入只读离线状态，无法调用云端模型或执行资金操作。
+
+## 演示账户
+
+| 账户 | 登录账号 | 密码 | 特征 |
+|---|---|---|---|
+| 林砚 | `linyan` | `Demo@2026` | 标准模式、私人银行主力账户、尾号 8848 |
+| 张建国 | `zhangjg` | `Demo@2026` | 长辈关怀模式、颐养账户、尾号 0921 |
 
 ## Windows 桌面版
 
-构建完成后的单文件应用位于 `dist/Easier-banking.exe`，双击即可启动，无需安装 Python、Node.js 或 Docker。应用会自动启动本机 FastAPI 服务，并使用 Edge/Chrome 的独立应用窗口打开银行工作台。
+主目录中的 `Easier-banking_桌面版.exe` 是单文件 Windows 应用，双击即启动：
 
-- 持久化数据库：`%LOCALAPPDATA%\Easier-banking\bank_core.db`
-- 启动与错误日志：`%LOCALAPPDATA%\Easier-banking\desktop.log`
-- 桌面应用不会直接打开 `static/index.html`；所有登录、余额、提案和云端模型请求都必须经过内置后端。
+- 自动启动本地 FastAPI 服务，并打开 Edge/Chrome 独立应用窗口。
+- 运行时不需要安装 Python、Node.js、Docker 或数据库。
+- 数据保存在 `%LOCALAPPDATA%\Easier-banking\bank_core.db`。
+- 日志保存在 `%LOCALAPPDATA%\Easier-banking\desktop.log`。
+- 浏览器窗口关闭后，本地服务同步退出。
 
-需要重新构建时，在安装了 Python 3.11+ 的 Windows 环境运行：
+桌面版未做商业代码签名，Windows 首次运行可能显示 SmartScreen。请核对随附的 SHA-256 文件后选择“更多信息 -> 仍要运行”。
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File build_desktop.ps1
+## 模型与网关
+
+默认路由顺序为：
+
+```text
+腾讯云 CloudBase GLM 主通道
+  -> DeepSeek / OpenAI 兼容中转备用
+  -> 本地确定性规则引擎
 ```
 
-首次构建会把 PyInstaller 和运行依赖安装到本地 `.desktop_venv`，不会进入正式运行依赖或提交到 Git。
+网关默认配置内置在 `core/config.py`，可通过 `.env` 或环境变量覆盖：
 
-演示账户：
+- `EASIER_BANKING_GATEWAY_URL`
+- `EASIER_BANKING_GATEWAY_APP_SECRET`
+- `EASIER_BANKING_CLOUD_RATE_LIMIT=20`
+- `EASIER_BANKING_CLOUD_TIMEOUT_SECONDS=8`
+- `EASIER_BANKING_CLOUD_FAILURE_THRESHOLD=3`
+- `EASIER_BANKING_CLOUD_CIRCUIT_SECONDS=60`
 
-- 林砚：`linyan` / `Demo@2026`
-- 张建国：`zhangjg` / `Demo@2026`
+网关密钥为空或使用 `YOUR_` 占位值时，应用自动切换本地规则模式，不发起网络请求。每个用户每分钟最多 20 次云端调用；8 秒超时；连续 3 次失败后熔断 60 秒。发送给模型的卡号只保留后四位，手机号、证件号和完整卡号会脱敏。
+
+如果桌面版顶栏显示“模式：离线”，先进入“系统与偏好设置”，点击“立即探测网关”。该按钮会清除可能残留的旧本地模式并把引擎切换回云端；成功时显示“腾讯云上海节点 · ...ms · ONLINE”，失败时会展示后端返回的具体原因。
 
 ## 环境变量
 
-### CloudBase 网关（可选）
+应用自动读取项目根目录 `.env`，进程环境变量优先。
 
-云端网关源码位于 `gateway/`。它在 CloudBase 中把 OpenAI 兼容请求转发到智谱，并强制锁定模型。部署时必须在目标函数的“环境变量”中配置：
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `DEMO_MODE` | `1` | 演示模式；为 1 时返回演示 OTP 提示并开放演示重置接口 |
+| `OTP_PEPPER` | 进程级随机值 | OTP 哈希 pepper；生产必须配置固定密钥 |
+| `EASIER_BANKING_SESSION_TTL_SECONDS` | `28800` | 登录会话有效期，默认 8 小时 |
+| `EASIER_BANKING_LOGIN_MAX_FAILURES` | `5` | 同一用户名或 IP 连续失败次数 |
+| `EASIER_BANKING_LOGIN_LOCK_SECONDS` | `300` | 登录锁定时间 |
+| `ACTION_PROPOSAL_TTL_SECONDS` | `120` | 授权提案有效期 |
+| `LIMIT_OVERRIDE_TTL_SECONDS` | `900` | 临时提额有效期 |
+| `EASIER_BANKING_DB_PATH` | 自动选择 | 指定 SQLite 文件路径 |
 
-```text
-ZHIPU_API_KEY=<智谱控制台生成的新 Key>
-APP_SECRET=<与 Agent 的 EASIER_BANKING_GATEWAY_APP_SECRET 一致>
-```
-
-将函数执行超时设置为至少 20 秒，并把 HTTP 访问服务路径映射为 `/chat/completions`。不要把这些值写入 `.env.example`、页面或 Git。详细步骤见 `gateway/README.md`。
-
-- `DEMO_MODE=1`：评委演示默认模式。只有该值启用时，提案响应中的 `demo_hint` 才会返回本次一次性验证码，界面显示“演示模式：验证码见提示”。生产环境必须设为 `0` 并接入真实短信、语音或验证器通道。
-- `OTP_PEPPER`：一次性验证码哈希的服务端密钥；生产环境必须显式设置并妥善保管。
-- `ACTION_PROPOSAL_TTL_SECONDS`：授权提案有效期，默认 120 秒。
-- `LIMIT_OVERRIDE_TTL_SECONDS`：临时额度有效期，默认 900 秒。
-- `EASIER_BANKING_GATEWAY_URL`：腾讯云 AI 网关地址。
-- `EASIER_BANKING_GATEWAY_APP_SECRET`：可选覆盖评委体验网关密钥；留空或设为 `YOUR_` 开头的占位值时自动进入离线规则模式。
-- `EASIER_BANKING_CLOUD_RATE_LIMIT`：每用户每分钟云端调用上限，默认 20。
-- `EASIER_BANKING_CLOUD_TIMEOUT_SECONDS`：云端单次超时，默认且最高 8 秒。
-- `EASIER_BANKING_CLOUD_FAILURE_THRESHOLD` / `EASIER_BANKING_CLOUD_CIRCUIT_SECONDS`：连续失败阈值与熔断时间，默认 3 次 / 60 秒。
-- `EASIER_BANKING_SESSION_TTL_SECONDS`：登录会话有效期，默认 28800 秒（8 小时）。
-- `EASIER_BANKING_LOGIN_MAX_FAILURES`、`..._FAILURE_WINDOW_SECONDS`、`..._LOCK_SECONDS`：登录连续失败锁定策略，默认 5 次、5 分钟窗口、锁定 5 分钟。
-- `DEEPSEEK_API_KEY`、`RELAY_BASE_URL`、`RELAY_API_KEY`：可选的二级模型通道。
-
-## 网关与隐私
-
-评委体验使用的是部署在腾讯云上海节点的受限凭证，服务端已实施每用户 20 次/分钟限流、8 秒超时与连续失败熔断，仅用于聊天推理，赛后将作废。浏览器不会获得或保存该凭证。
-
-发送给网关的上下文只包含账户状态、交易摘要、联系人和银行卡后四位等办理业务所需信息；手机号、证件号与完整卡号会在服务端脱敏。未配置网关时系统自动使用本地规则引擎，不影响登录、只读查询和受控提案流程。
+生产部署必须设置 `DEMO_MODE=0`，并接入真实短信、人脸或安全密钥验证。
 
 ## 安全设计
 
-### 单一风险策略
-
-`core/policy.py` 的 `classify(user_id, action)` 是风险分级的唯一来源：
-
-- **L1**：冻结卡片、开启境外/夜间/免密代扣/ATM 锁等保护性操作。需要确认卡，无需验证码。
-- **L2**：额度内且收款人已登记的转账、订阅或退订、资金口袋、小额理财赎回。需要确认卡。
-- **L3**：超额转账、临时提额、首次向未登记收款人转账、解冻、关闭安全锁、提高卡片限额、理财申购和大额赎回。需要确认卡和一次性验证码。
-
-聊天路径、银行卡控制台及旧工具注册中心均调用同一策略。用户或模型自行提交的 `confirmed=true` 不再具有执行意义。
-
-### 提案状态机
-
-所有 AI 写操作先生成后端提案，默认 120 秒后过期：
-
-```text
-PENDING -> CONFIRMED -> EXECUTED
-        -> CANCELLED
-        -> EXPIRED
-```
-
-确认令牌仅以哈希形式存储并在提案响应中返回一次。参数动作会生成规范化 JSON 的 SHA-256 摘要。确认时同时校验当前用户、令牌、参数摘要、PENDING 状态与过期时间，并通过单条条件 UPDATE 抢占提案；只有更新行数为 1 的请求可以执行账务操作，因此重复或并发确认不会重复扣款。
-
-### 一次性验证码与临时额度
-
-- OTP 使用密码学安全随机数生成，服务端保存带 pepper 的哈希、过期时间和失败次数。
-- OTP 缺失或错误都会计数；连续失败 3 次后提案作废。
-- `DEMO_MODE=1` 时，响应中的 `demo_hint` 用于评委演示；其他情况不得返回明文验证码。
-- L3 转账确认成功后写入 `limit_overrides`。有效额度等于用户基础额度加未过期临时额度，基础 `transfer_threshold` 不会被修改；临时额度到期后自动失效。
-- 基础单日限额也不能通过 `/api/preferences` 直接调高；调高限额会生成 `limit_change` 提案，并按 L3 要求验证。
-- 后端服务不可达时，浏览器只展示上次同步的只读缓存；不得在浏览器本地生成授权、扣款、转账、锁卡或订阅变更。界面会明确显示“服务暂不可用，操作未执行”。
-
-### 复杂任务 DAG 与 Saga
-
-“锁定专项资金并预订机票、鲜花或蛋糕”等明确的跨场景资金指令不会被模型自由改写为单步操作，而是进入确定性规划器。执行流程为：
-
-```text
-查询账户/卡片 -> 锁定专项口袋 -> 创建外部生活服务订单 -> 账本与审计落盘
-```
-
-每个写节点都经统一工具注册中心的 `policy.classify_tool` 定级；黄色节点展示确认卡，红色节点要求输入 6 位一次性验证码。主聊天会逐节点等待确认并持续刷新 SAGA 状态。用户取消后续节点时，后端按逆序调用已完成节点的补偿函数并写入审计链。
-
-### 审计与兼容
-
-- 提案创建、确认、取消、过期、执行以及临时额度创建均写入 SHA-256 审计链。
-- 旧的 `POST /api/assistant/action` 与 `POST /api/assistant/execute` 已返回 HTTP 410。
-- 新流程为 `POST /api/assistant/propose` 与 `POST /api/assistant/confirm`。
-- `/api/system/reset-demo` 与 `/api/security/reset-breaker` 仅在 `DEMO_MODE=1` 可用；重置演示业务数据不会删除审计链，并要求重新登录。
-- 登录会话默认 8 小时过期；同一用户名或 IP 连续 5 次失败后锁定 5 分钟。
-
-请求示例：
-
-```json
-POST /api/assistant/propose
-{
-  "action": {
-    "action": "transfer",
-    "params": {"recipient": "房东陈姐", "amount": 300, "remark": "房租"}
-  }
-}
-```
-
-```json
-POST /api/assistant/confirm
-{
-  "proposal_id": "PROP-...",
-  "confirm_token": "server-issued-token",
-  "otp": null,
-  "cancel": false
-}
-```
+- 服务端唯一风险策略：`core/policy.py::classify`。
+- 客户端传入的 `confirmed=true` 不构成授权。
+- 旧 `/api/assistant/action`、`/api/assistant/execute` 已停用并返回 410。
+- 提案状态机：`PENDING -> CONFIRMED -> EXECUTED / CANCELLED / EXPIRED`。
+- 错误 OTP 三次后提案作废；`DEMO_MODE=0` 不返回明文 OTP。
+- 所有提案创建、确认、取消、过期和执行写入 SHA-256 审计链。
+- 输入层拦截越狱、伪造权限、绕过风控和泄露密钥请求。
+- AST 沙箱限制导入、文件访问、动态执行和危险属性访问。
+- 登录会话默认 8 小时过期；同一用户名或 IP 连续 5 次失败锁定 5 分钟。
+- 演示重置 API 仅在 `DEMO_MODE=1` 可用，重置业务数据但不删除 `audit_logs`。
 
 ## 测试
 
-```bash
+在项目根目录运行：
+
+```powershell
 python -m pytest -q
 ```
 
-当前基线：`124 passed`。覆盖两阶段授权、并发防重、OTP、临时额度、会话与登录限流、网关熔断、人工接管工单、跨场景 DAG 确认与回滚、工具调用泄漏防护、沙箱工具、合规边界、六场景工具及桌面启动器。
+当前基线：`123 passed`。覆盖旧接口 410、并发确认防重、越权与篡改、OTP 计数、临时额度到期、五类审计事件、32 条只读意图、天气/体育等合规拒答、L3 财富操作、人工接管工单、跨场景 DAG 完成与逆向补偿、敏感字符串扫描、TLS 网关探测和桌面启动器安全模式。
+
+## 项目结构
+
+```text
+Easier-banking/
+  core/                 配置、数据库、权限策略、AI、安全、沙箱、审计
+  tools/                六场景工具、Saga 补偿和统一注册中心
+  gateway/              CloudBase OpenAI 兼容网关源码与部署说明
+  static/               银行工作台前端
+  tests/                自动化测试
+  main.py               FastAPI 应用与 API
+  desktop_launcher.py   Windows 桌面启动器
+  build_desktop.ps1     单文件 EXE 构建脚本
+  requirements.txt      轻量 Python 依赖
+```
+
+## 已知边界
+
+本项目是比赛演示系统，不声称已通过生产银行安全认证。真实上线还需接入银行核心账务、真实 KYC/AML、多机数据库、HSM 密钥托管、短信/人脸验证、企业代码签名和独立渗透测试。评委体验网关凭证是受限临时凭证，赛后失效。
